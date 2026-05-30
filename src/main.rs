@@ -1,9 +1,9 @@
 use std::path::Path;
 
 mod disk;
-use crate::disk::DiskImage;
+mod scanner;
 
-const JPEG_BYTES: &[u8] = &[0xFF, 0xD8, 0xFF, 0xE0]; // This is where magic begins :D
+use disk::DiskImage;
 
 fn main() {
     println!("Reclaimer - File Recovery Tool");
@@ -19,29 +19,34 @@ fn main() {
         }
     };
 
-    println!("Scanning for JPEG signatures...\n");
+    println!("Scanning for file signatures...\n");
 
-    let mut sector_number = 0;
+    let mut sector_number = 0u64;
+    let mut found_count = 0u32;
 
     loop {
         match image.read_sector(sector_number) {
             Ok(sector) => {
-                if sector.starts_with(&JPEG_BYTES) {
+                if let Some(sig) = scanner::detect_signature(&sector) {
+                    found_count += 1;
                     println!(
-                        "Found JPEG at sector {} (offset: {})",
+                        "[{}] Found {} at sector {} (byte offset {})",
+                        found_count,
+                        sig.name,
                         sector_number,
                         sector_number * 512
                     );
                 }
-
                 sector_number += 1;
             }
             Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => {
                 println!("\nScan complete. Reached end of image.");
+                println!("Total found: {}", found_count);
                 break;
             }
             Err(e) => {
-                eprintln!("Failed to read sector: {}", e);
+                eprintln!("Read error at sector {}: {}", sector_number, e);
+                break;
             }
         }
     }
