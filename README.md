@@ -97,4 +97,4 @@ Reclaimer is intended for legitimate data recovery and forensic learning purpose
 
 ## License
 
-MIT
+MIT License, see [LICENSE](./LICENSE) for details.
