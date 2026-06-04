@@ -111,6 +111,7 @@ pub fn extract_file(
 
 /// Searches for a byte pattern inside a larger byte slice.
 /// Returns the index where the pattern starts, or None if not found.
+#[allow(dead_code)]
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())

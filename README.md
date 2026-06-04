@@ -97,4 +97,8 @@ Reclaimer is intended for legitimate data recovery and forensic learning purpose
 
 ## License
 
+<<<<<<< HEAD
 MIT
+=======
+MIT License, see [LICENSE](./LICENSE) for details.
+>>>>>>> 5d9243b90fe266d8606173c1ffb053c1969fae1d
