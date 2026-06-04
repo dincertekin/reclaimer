@@ -1,5 +1,3 @@
-// Disk reading module
-// We will build this out next
 use std::fs::File;
 use std::io::{self, Read, Seek, SeekFrom};
 use std::path::Path;

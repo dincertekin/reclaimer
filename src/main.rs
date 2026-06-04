@@ -10,6 +10,7 @@ fn main() {
     println!("-------------------------------");
 
     let path = Path::new("test.img");
+    let output_dir = Path::new("recovered");
 
     let mut image = match DiskImage::open(path) {
         Ok(image) => image,
@@ -36,6 +37,18 @@ fn main() {
                         sector_number,
                         sector_number * 512
                     );
+
+                    match scanner::extract_file(
+                        &sector,
+                        sig,
+                        &mut image,
+                        sector_number,
+                        output_dir,
+                        found_count,
+                    ) {
+                        Ok(filename) => println!("Saved as: {}", filename),
+                        Err(e) => eprintln!("Failed to save: {}", e),
+                    }
                 }
                 sector_number += 1;
             }
