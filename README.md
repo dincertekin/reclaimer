@@ -1,4 +1,4 @@
-# reclaimer
+# Reclaimer
 
 A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk images and physical drives to find and recover deleted files, even after the recycle bin has been emptied.
 
