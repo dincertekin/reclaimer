@@ -4,8 +4,6 @@ A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk im
 
 > This project is a work in progress. Currently in early development.
 
----
-
 ## Goals
 
 - Recover deleted photos and videos from Windows NTFS drives
@@ -24,8 +22,6 @@ A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk im
 - [ ] Simple GUI built with egui
 - [ ] Physical drive scanning on Windows (`\\.\C:`)
 
----
-
 ## How It Works
 
 When a file is deleted, the operating system marks its space as available but does not immediately overwrite the data. Reclaimer works in two ways:
@@ -34,8 +30,6 @@ When a file is deleted, the operating system marks its space as available but do
 
 2. **File Carving.** Even when MFT entries are gone, file data may still exist on disk. Reclaimer scans raw bytes for known file signatures (magic bytes) to locate recoverable files.
 
----
-
 ## Supported File Systems
 
 | File System | Status  |
@@ -43,8 +37,6 @@ When a file is deleted, the operating system marks its space as available but do
 | NTFS        | Planned |
 | FAT32/exFAT | Future  |
 | ext4        | Future  |
-
----
 
 ## Getting Started
 
@@ -68,8 +60,6 @@ cargo build
 cargo run
 ```
 
----
-
 ## Project Structure
 
 ```
@@ -81,19 +71,13 @@ src/
 └── ui/            # GUI (egui)
 ```
 
----
-
 ## Learning Goals
 
 This project is also a personal exercise in learning Rust. The code prioritizes clarity and correctness over speed. Comments and documentation are written to explain not just what the code does, but why.
 
----
-
 ## Disclaimer
 
 Reclaimer is intended for legitimate data recovery and forensic learning purposes only. Always recover files to a separate drive, never to the source drive, to avoid overwriting data you are trying to recover.
-
----
 
 ## License
 
