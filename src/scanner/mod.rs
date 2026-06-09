@@ -11,7 +11,7 @@ pub struct FileSignature {
     pub max_size_bytes: usize,
 }
 
-// Known file signatures for detecting file types.
+// Known file signatures for detecting file types
 pub const SIGNATURES: &[FileSignature] = &[
     FileSignature {
         name: "JPEG",
@@ -49,7 +49,7 @@ pub const SIGNATURES: &[FileSignature] = &[
     },
 ];
 
-// Checks a sector against all known signatures and returns the first match, if any.
+// Checks a sector against all known signatures and returns the first match, if any
 pub fn detect_signature(sector: &[u8]) -> Option<&'static FileSignature> {
     for sig in SIGNATURES {
         let start = sig.offset;
@@ -92,9 +92,6 @@ pub fn extract_file(
         }
     }
 
-    // After collecting all data, find the LAST occurrence of the end marker.
-    // We search backward because formats like JPEG can contain the end marker
-    // bytes in the middle of the file. Only the final one is the real end.
     if let Some(marker) = sig.end_marker {
         if let Some(end_pos) = find_subsequence_last(&data, marker) {
             data.truncate(end_pos + marker.len());
@@ -109,8 +106,6 @@ pub fn extract_file(
     Ok(filename)
 }
 
-/// Searches for a byte pattern inside a larger byte slice.
-/// Returns the index where the pattern starts, or None if not found.
 #[allow(dead_code)]
 fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
@@ -118,9 +113,6 @@ fn find_subsequence(haystack: &[u8], needle: &[u8]) -> Option<usize> {
         .position(|window| window == needle)
 }
 
-/// Same as find_subsequence but returns the LAST occurrence.
-/// Used for formats like JPEG where the end marker can appear
-/// multiple times inside the file data. Only the final one is real.
 fn find_subsequence_last(haystack: &[u8], needle: &[u8]) -> Option<usize> {
     haystack
         .windows(needle.len())
