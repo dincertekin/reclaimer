@@ -49,7 +49,6 @@ pub const SIGNATURES: &[FileSignature] = &[
     },
 ];
 
-// Checks a sector against all known signatures and returns the first match, if any
 pub fn detect_signature(sector: &[u8]) -> Option<&'static FileSignature> {
     for sig in SIGNATURES {
         let start = sig.offset;
