@@ -1,84 +1,134 @@
 # Reclaimer
 
-A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk images and physical drives to find and recover deleted files, even after the recycle bin has been emptied.
+A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk images to find and recover deleted files using file signature carving. Built as a hands-on Rust learning project, with a focus on clean code and real forensic techniques.
 
-> This project is a work in progress. Currently in early development.
+> Work in progress — core carving pipeline works end-to-end, GUI is functional.
 
-## Goals
+---
 
-- Recover deleted photos and videos from Windows NTFS drives
-- Scan raw disk images (`.img`, `.dd`) for forensic practice
-- Parse the NTFS Master File Table (MFT) to find deleted file entries
-- Use file signature scanning (carving) to recover files even when metadata is gone
-- Provide a simple GUI for non-technical users
+## What Works Right Now
 
-## Planned Features
+- Load a `.img`, `.dd`, `.raw`, or any raw disk image via the file picker or drag-and-drop
+- Sector-by-sector scanning with live progress
+- File signature carving — detects and extracts JPEG, PNG, MP4, PDF
+- Results table with filename, type badge, size, sector, and hex offset
+- Detail panel for each recovered file with Open File and Copy Path actions
+- Sidebar filter by file type (Images, Documents, Media, Other)
+- Recovered files saved to `recovered/` relative to your working directory
 
-- [x] Raw disk image reading (sector by sector)
-- [ ] NTFS MFT parsing
-- [ ] File signature carving (JPEG, PNG, MP4, and more)
-- [ ] Deleted file listing with metadata (name, size, date)
-- [ ] File recovery to a chosen output folder
-- [ ] Simple GUI built with egui
-- [ ] Physical drive scanning on Windows (`\\.\C:`)
+---
 
-## How It Works
+## How File Carving Works
 
-When a file is deleted, the operating system marks its space as available but does not immediately overwrite the data. Reclaimer works in two ways:
+When a file is deleted, the OS marks its sectors as free but rarely overwrites them immediately. Reclaimer exploits this by scanning every sector looking for known **magic bytes** — the fixed byte sequences that identify file types:
 
-1. **MFT Parsing.** On NTFS drives, file metadata is stored in a structure called the Master File Table. Deleted entries are marked but often still readable. Reclaimer reads the MFT directly to find these entries.
+| Format | Magic bytes | End marker |
+|--------|-------------|------------|
+| JPEG | `FF D8 FF E0` at offset 0 | `FF D9` (last occurrence) |
+| PNG | `89 50 4E 47 0D 0A 1A 0A` at offset 0 | IEND chunk |
+| MP4 | `66 74 79 70` at offset 4 (`ftyp` box) | size-limited |
+| PDF | `25 50 44 46` at offset 0 | `%%EOF` |
 
-2. **File Carving.** Even when MFT entries are gone, file data may still exist on disk. Reclaimer scans raw bytes for known file signatures (magic bytes) to locate recoverable files.
+When a signature is found, Reclaimer reads forward sector-by-sector until it hits the end marker (or a size limit), then writes the extracted bytes to a file. For JPEG specifically, `FF D9` can appear inside the file, so Reclaimer always uses the **last** occurrence to avoid truncation.
 
-## Supported File Systems
-
-| File System | Status  |
-| ----------- | ------- |
-| NTFS        | Planned |
-| FAT32/exFAT | Future  |
-| ext4        | Future  |
-
-## Getting Started
-
-### Requirements
-
-- Rust (install via [rustup](https://rustup.rs))
-- Windows (for physical drive scanning)
-- A raw disk image for testing (`.img` or `.dd`)
-
-### Build
-
-```bash
-git clone https://github.com/dincertekin/reclaimer
-cd reclaimer
-cargo build
-```
-
-### Run
-
-```bash
-cargo run
-```
+---
 
 ## Project Structure
 
 ```
 src/
-├── main.rs        # Entry point
-├── disk/          # Raw disk and image reading
-├── scanner/       # File signature carving
-├── ntfs/          # NTFS MFT parsing
-└── ui/            # GUI (egui)
+├── main.rs              # eframe entry point, loads the Dock icon
+├── disk/
+│   └── mod.rs           # DiskImage — opens a file and reads 512-byte sectors
+├── scanner/
+│   ├── mod.rs           # detect_signature(), extract_file()
+│   └── signatures.rs    # SIGNATURES table — add new file formats here
+└── ui/
+    ├── mod.rs           # ReclaimerApp state, eframe::App impl, channel polling
+    ├── types.rs         # Palette constants, FoundFile, all shared enums
+    ├── render.rs        # All egui rendering — toolbar, sidebar, table, detail panel
+    └── scan.rs          # start_scan(), background scan thread
 ```
+
+---
+
+## Tech Stack
+
+| Crate | Purpose |
+|-------|---------|
+| `eframe 0.34` + `egui 0.34` | GUI — immediate-mode, pure Rust, no web tech |
+| `rfd 0.15` | Native OS file picker (NSOpenPanel on macOS) |
+| `open 5` | Opens recovered files with the OS default app |
+| `image 0.25` | Decodes the app icon PNG for the macOS Dock |
+
+---
+
+## Getting Started
+
+**Requirements:** Rust (install via [rustup.rs](https://rustup.rs))
+
+```bash
+git clone https://github.com/dincertekin/reclaimer
+cd reclaimer
+cargo run
+```
+
+No npm, no build scripts, no extra CLI tools. Plain `cargo run`.
+
+---
+
+## Adding a New File Signature
+
+Open `src/scanner/signatures.rs` and add an entry to the `SIGNATURES` array:
+
+```rust
+FileSignature {
+    name:           "GIF",
+    magic:          &[0x47, 0x49, 0x46, 0x38],  // "GIF8"
+    offset:         0,
+    extension:      "gif",
+    end_marker:     Some(&[0x00, 0x3B]),          // GIF trailer
+    max_size_bytes: 5 * 1024 * 1024,
+},
+```
+
+`detect_signature()` and `extract_file()` pick it up automatically — no other changes needed.
+
+---
+
+## Roadmap
+
+- [ ] NTFS MFT parsing — read deleted file metadata (name, path, dates) from the Master File Table
+- [ ] Physical disk and USB drive scanning — enumerate `/dev/rdiskN` on macOS, `\\.\PhysicalDriveN` on Windows
+- [ ] Filter text input wired to the search box
+- [ ] Configurable output directory
+- [ ] More file signatures — GIF, ZIP, DOCX, SQLite, HEIC
+
+---
+
+## Supported File Systems
+
+| File System | Status |
+|-------------|--------|
+| Raw image (any) | Working — carving only |
+| NTFS | Planned — MFT parsing |
+| FAT32 / exFAT | Future |
+| ext4 | Future |
+
+---
 
 ## Learning Goals
 
-This project is also a personal exercise in learning Rust. The code prioritizes clarity and correctness over speed. Comments and documentation are written to explain not just what the code does, but why.
+This is a personal Rust learning project. Priorities in order: learning Rust correctly → working features → speed of development. The code is kept in small focused modules, avoids premature abstraction, and comments explain the *why* rather than the *what*.
+
+---
 
 ## Disclaimer
 
-Reclaimer is intended for legitimate data recovery and forensic learning purposes only. Always recover files to a separate drive, never to the source drive, to avoid overwriting data you are trying to recover.
+Reclaimer is for legitimate data recovery and forensic learning only. Always recover files to a separate drive or folder — never write to the source disk, as that can overwrite the data you are trying to recover.
+
+---
 
 ## License
 
-MIT License, see [LICENSE](./LICENSE) for details.
+MIT — see [LICENSE](./LICENSE).
