@@ -23,8 +23,6 @@ const statFound = document.getElementById("stat-found");
 const statRecovered = document.getElementById("stat-recovered");
 const statSize = document.getElementById("stat-size");
 
-// Listen for live progress updates emitted from the Rust scan_image command.
-// This fires every 50 sectors while scanning is in progress.
 listen("scan-progress", (event) => {
   const { scanned_sectors, total_sectors, found_count } = event.payload;
 
@@ -40,7 +38,6 @@ listen("scan-progress", (event) => {
   }
 });
 
-// Opens a native file picker using the tauri-plugin-dialog plugin.
 openBtn.addEventListener("click", async () => {
   console.log("[ui] open clicked");
 
@@ -53,7 +50,6 @@ openBtn.addEventListener("click", async () => {
       ],
     });
 
-    // open() returns null if the user cancels the dialog.
     if (!selected) {
       console.log("[ui] file picker cancelled");
       return;
@@ -69,7 +65,6 @@ openBtn.addEventListener("click", async () => {
   }
 });
 
-// Runs the real scan by invoking the Rust scan_image command.
 scanBtn.addEventListener("click", async () => {
   if (!imagePath) return;
 
@@ -90,9 +85,6 @@ scanBtn.addEventListener("click", async () => {
   scanBtn.disabled = true;
 
   try {
-    // This calls into Rust's scan_image function in src/commands.rs.
-    // Rust does the actual disk reading and file carving, then returns
-    // the full list of found files as JSON once the scan is complete.
     const results = await invoke("scan_image", { imagePath });
 
     foundFiles = results.map((f) => ({
@@ -120,7 +112,6 @@ scanBtn.addEventListener("click", async () => {
   }
 });
 
-// Renders the list of found files on the left.
 function renderResults() {
   if (foundFiles.length === 0) {
     resultsList.innerHTML = `<div class="empty-state">No files found yet.</div>`;
@@ -153,7 +144,6 @@ function renderResults() {
   });
 }
 
-// Renders the detail panel on the right for the selected file.
 function renderDetail() {
   if (selectedIndex === null || !foundFiles[selectedIndex]) {
     detailPanel.innerHTML = `
