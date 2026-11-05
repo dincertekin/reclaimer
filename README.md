@@ -4,6 +4,10 @@ A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk im
 
 > Work in progress — core carving pipeline works end-to-end, GUI is functional.
 
+![Reclaimer after a scan: recovered files listed with type and size, and a detail panel for the selected file](.github/assets/screenshot.png)
+
+<sub>Scan of a demo disk image.</sub>
+
 ---
 
 ## What Works Right Now
