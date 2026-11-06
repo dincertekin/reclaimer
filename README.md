@@ -13,8 +13,9 @@ A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk im
 ## What Works Right Now
 
 - Load a `.img`, `.dd`, `.raw`, or any raw disk image via the file picker or drag-and-drop
-- Sector-by-sector scanning with live progress
-- File signature carving — detects and extracts JPEG, PNG, MP4, PDF
+- Fast scanning — reads in large aligned chunks (about 1 GB in under a second from cache)
+- Structure-aware carving — JPEG (JFIF and EXIF), PNG, GIF, MP4, MOV, HEIC, AVIF, PDF, ZIP, DOCX/XLSX/PPTX, SQLite
+- Each file reports whether it was recovered intact or only partially
 - Results table with filename, type badge, size, sector, and hex offset
 - Detail panel for each recovered file with Open File and Copy Path actions
 - Sidebar filter by file type (Images, Documents, Media, Other)
@@ -24,16 +25,21 @@ A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk im
 
 ## How File Carving Works
 
-When a file is deleted, the OS marks its sectors as free but rarely overwrites them immediately. Reclaimer exploits this by scanning every sector looking for known **magic bytes** — the fixed byte sequences that identify file types:
+When a file is deleted, the OS marks its sectors as free but rarely overwrites them immediately. Reclaimer reads every sector looking for known **magic bytes** — the fixed byte sequences that start each file type.
 
-| Format | Magic bytes | End marker |
+Finding the start is easy; finding the **end** is what matters. Reclaimer never guesses: each format's carver walks the file's own structure until it ends.
+
+| Format | Starts with | Ends where |
 |--------|-------------|------------|
-| JPEG | `FF D8 FF E0` at offset 0 | `FF D9` (last occurrence) |
-| PNG | `89 50 4E 47 0D 0A 1A 0A` at offset 0 | IEND chunk |
-| MP4 | `66 74 79 70` at offset 4 (`ftyp` box) | size-limited |
-| PDF | `25 50 44 46` at offset 0 | `%%EOF` |
+| JPEG | `FF D8 FF` | `FF D9` reached by hopping segment to segment (skips EXIF thumbnails) |
+| PNG | `89 50 4E 47 0D 0A 1A 0A` | after the `IEND` chunk |
+| GIF | `GIF87a` / `GIF89a` | the `3B` trailer, after walking all blocks |
+| MP4 · MOV · HEIC · AVIF | `ftyp` box at offset 4 | after the last top-level box |
+| PDF | `%PDF-` | last `%%EOF` (or the exact length in linearized PDFs) |
+| ZIP · DOCX · XLSX · PPTX | `PK 03 04` | end-of-central-directory record that points back to this file |
+| SQLite | `SQLite format 3` | page size × page count from the header |
 
-When a signature is found, Reclaimer reads forward sector-by-sector until it hits the end marker (or a size limit), then writes the extracted bytes to a file. For JPEG specifically, `FF D9` can appear inside the file, so Reclaimer always uses the **last** occurrence to avoid truncation.
+After carving a file, the scan jumps past it rather than re-reading it.
 
 ---
 
@@ -42,11 +48,12 @@ When a signature is found, Reclaimer reads forward sector-by-sector until it hit
 ```
 src/
 ├── main.rs              # eframe entry point, loads the Dock icon
-├── disk/
-│   └── mod.rs           # DiskImage — opens a file and reads 512-byte sectors
+├── source/
+│   └── mod.rs           # BlockSource trait + ImageFile — where bytes come from
 ├── scanner/
-│   ├── mod.rs           # detect_signature(), extract_file()
-│   └── signatures.rs    # SIGNATURES table — add new file formats here
+│   ├── mod.rs           # scan() finds files, export() saves one
+│   ├── window.rs        # read-ahead buffer: few large aligned reads
+│   └── formats/         # one carver per format; FORMATS table in mod.rs
 └── ui/
     ├── mod.rs           # ReclaimerApp state, eframe::App impl, channel polling
     ├── types.rs         # Palette constants, FoundFile, all shared enums
@@ -81,22 +88,19 @@ No npm, no build scripts, no extra CLI tools. Plain `cargo run`.
 
 ---
 
-## Adding a New File Signature
+## Adding a New File Format
 
-Open `src/scanner/signatures.rs` and add an entry to the `SIGNATURES` array:
+Create `src/scanner/formats/<name>.rs` with two functions:
 
 ```rust
-FileSignature {
-    name:           "GIF",
-    magic:          &[0x47, 0x49, 0x46, 0x38],  // "GIF8"
-    offset:         0,
-    extension:      "gif",
-    end_marker:     Some(&[0x00, 0x3B]),          // GIF trailer
-    max_size_bytes: 5 * 1024 * 1024,
-},
+pub fn matches(header: &[u8]) -> bool                 // does a file start here?
+pub fn carve(w: &mut Window, start: u64, limit: u64)
+    -> io::Result<Option<Carved>>                     // where does it end?
 ```
 
-`detect_signature()` and `extract_file()` pick it up automatically — no other changes needed.
+Then add one line to `FORMATS` in `src/scanner/formats/mod.rs`. Use the existing carvers as a guide, and add a `sample()` fixture with tests.
+
+Run the tests with `cargo test`. Among other things, they check that `test.img` gives back the files in `originals/` byte for byte.
 
 ---
 
@@ -106,7 +110,6 @@ FileSignature {
 - [ ] Physical disk and USB drive scanning — enumerate `/dev/rdiskN` on macOS, `\\.\PhysicalDriveN` on Windows
 - [ ] Filter text input wired to the search box
 - [ ] Configurable output directory
-- [ ] More file signatures — GIF, ZIP, DOCX, SQLite, HEIC
 
 ---
 

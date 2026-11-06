@@ -1,8 +1,12 @@
-use std::path::PathBuf;
-use std::sync::mpsc;
+use std::io;
+use std::path::{Path, PathBuf};
+use std::sync::atomic::{AtomicBool, Ordering};
+use std::sync::{mpsc, Arc};
 use eframe::egui;
 use super::ReclaimerApp;
 use super::types::{Category, DotState, FoundFile, Phase, ScanMsg};
+use crate::scanner::{self, ScanEvent};
+use crate::source::ImageFile;
 
 impl ReclaimerApp {
     pub(super) fn start_scan(&mut self, ctx: egui::Context) {
@@ -10,6 +14,7 @@ impl ReclaimerApp {
         let image_path = path.clone();
         let output_dir = PathBuf::from("recovered");
 
+        self.cancel_scan();
         self.phase = Phase::Scanning;
         self.found_files = Vec::new();
         self.selected_idx = None;
@@ -20,87 +25,78 @@ impl ReclaimerApp {
         self.dot_state = DotState::Scanning;
 
         let (tx, rx) = mpsc::channel();
+        let cancel = Arc::new(AtomicBool::new(false));
         self.scan_rx = Some(rx);
+        self.scan_cancel = Some(Arc::clone(&cancel));
 
         std::thread::spawn(move || {
-            run_scan(image_path, output_dir, tx, ctx);
+            let msg = match run_scan(&image_path, &output_dir, &cancel, &tx, &ctx) {
+                Ok(())  => ScanMsg::Done,
+                Err(e)  => ScanMsg::Error(e.to_string()),
+            };
+            let _ = tx.send(msg);
+            ctx.request_repaint();
         });
+    }
+
+    /// Stops a running scan; its thread exits at the next block.
+    pub(super) fn cancel_scan(&mut self) {
+        if let Some(cancel) = self.scan_cancel.take() {
+            cancel.store(true, Ordering::Relaxed);
+        }
+        self.scan_rx = None;
     }
 }
 
 fn run_scan(
-    image_path: PathBuf,
-    output_dir: PathBuf,
-    tx: mpsc::Sender<ScanMsg>,
-    ctx: egui::Context,
-) {
-    use crate::{disk, scanner};
+    image_path: &Path,
+    output_dir: &Path,
+    cancel:     &AtomicBool,
+    tx:         &mpsc::Sender<ScanMsg>,
+    ctx:        &egui::Context,
+) -> io::Result<()> {
+    std::fs::create_dir_all(output_dir)?;
+    let mut source = ImageFile::open(image_path)?;
+    // A second handle for saving: the scan holds the first one.
+    let mut saver = ImageFile::open(image_path)?;
 
-    if let Err(e) = std::fs::create_dir_all(&output_dir) {
-        let _ = tx.send(ScanMsg::Error(e.to_string()));
-        return;
-    }
-
-    let mut image = match disk::DiskImage::open(&image_path) {
-        Ok(img) => img,
-        Err(e) => {
-            let _ = tx.send(ScanMsg::Error(format!("Failed to open image: {e}")));
-            return;
-        }
-    };
-
-    let total_sectors = std::fs::metadata(&image_path)
-        .map(|m| m.len() / image.sector_size)
-        .unwrap_or(0);
-
-    let mut sector = 0u64;
     let mut found = 0u32;
+    let mut save_error = None;
 
-    loop {
-        match image.read_sector(sector) {
-            Ok(data) => {
-                if let Some(sig) = scanner::detect_signature(&data) {
+    scanner::scan(&mut source, cancel, |event| match event {
+        ScanEvent::Progress { done, total } => {
+            let _ = tx.send(ScanMsg::Progress { scanned: done / 512, total: total / 512, found });
+            ctx.request_repaint();
+        }
+        ScanEvent::Found(item) => {
+            let filename = format!("recovered_{}.{}", found + 1, item.kind.ext);
+            match scanner::export(&mut saver, &item, &output_dir.join(&filename)) {
+                Ok(()) => {
                     found += 1;
-                    if let Ok(filename) =
-                        scanner::extract_file(&data, sig, &mut image, sector, &output_dir, found)
-                    {
-                        let path = output_dir.join(&filename);
-                        let size = std::fs::metadata(&path)
-                            .map(|m| m.len() as usize)
-                            .unwrap_or(0);
-                        let _ = tx.send(ScanMsg::Found(FoundFile {
-                            file_type: sig.name.to_string(),
-                            extension: sig.extension.to_string(),
-                            sector,
-                            offset: sector * 512,
-                            size_bytes: size,
-                            filename,
-                            category: Category::from_ext(sig.extension),
-                        }));
-                        ctx.request_repaint();
-                    }
-                }
-
-                sector += 1;
-
-                if sector.is_multiple_of(50) {
-                    let _ = tx.send(ScanMsg::Progress {
-                        scanned: sector,
-                        total: total_sectors,
-                        found,
-                    });
+                    let _ = tx.send(ScanMsg::Found(FoundFile {
+                        file_type:  item.kind.name.to_string(),
+                        extension:  item.kind.ext.to_string(),
+                        sector:     item.offset / 512,
+                        offset:     item.offset,
+                        size_bytes: item.len as usize,
+                        filename,
+                        category:   Category::from_ext(item.kind.ext),
+                        complete:   item.complete,
+                    }));
                     ctx.request_repaint();
                 }
-            }
-            Err(e) if e.kind() == std::io::ErrorKind::UnexpectedEof => break,
-            Err(e) => {
-                let _ = tx.send(ScanMsg::Error(format!("Read error at sector {sector}: {e}")));
-                return;
+                Err(e) => {
+                    // Can't save (disk full, permissions): stop rather than
+                    // keep reporting files that aren't there.
+                    save_error.get_or_insert(e);
+                    cancel.store(true, Ordering::Relaxed);
+                }
             }
         }
-    }
+    })?;
 
-    let _ = tx.send(ScanMsg::Progress { scanned: sector, total: total_sectors, found });
-    let _ = tx.send(ScanMsg::Done);
-    ctx.request_repaint();
+    match save_error {
+        Some(e) => Err(io::Error::new(e.kind(), format!("Could not save recovered file: {e}"))),
+        None    => Ok(()),
+    }
 }

@@ -1,5 +1,6 @@
 use std::path::PathBuf;
-use std::sync::mpsc;
+use std::sync::atomic::AtomicBool;
+use std::sync::{mpsc, Arc};
 use eframe::egui::{self, Color32, Stroke, Vec2};
 
 mod types;
@@ -23,6 +24,7 @@ pub struct ReclaimerApp {
     pub(crate) total_sectors:   u64,
     pub(crate) found_count:     u32,
     pub(crate) scan_rx:         Option<mpsc::Receiver<ScanMsg>>,
+    pub(crate) scan_cancel:     Option<Arc<AtomicBool>>,
     pub(crate) file_rx:         Option<mpsc::Receiver<Option<PathBuf>>>,
 }
 
@@ -42,6 +44,7 @@ impl ReclaimerApp {
             total_sectors:   0,
             found_count:     0,
             scan_rx:         None,
+            scan_cancel:     None,
             file_rx:         None,
         }
     }
@@ -92,6 +95,7 @@ impl ReclaimerApp {
     }
 
     fn load_image(&mut self, path: PathBuf) {
+        self.cancel_scan();
         self.image_path   = Some(path);
         self.found_files  = Vec::new();
         self.selected_idx = None;
@@ -148,8 +152,9 @@ impl ReclaimerApp {
                     self.found_files.push(file);
                 }
                 ScanMsg::Done => {
-                    self.phase     = Phase::Done;
-                    self.scan_rx   = None;
+                    self.phase       = Phase::Done;
+                    self.scan_rx     = None;
+                    self.scan_cancel = None;
                     let count      = self.found_files.len();
                     self.status_text = if count == 0 {
                         "Scan complete \u{2014} no artifacts found".into()
@@ -161,6 +166,7 @@ impl ReclaimerApp {
                 ScanMsg::Error(e) => {
                     self.phase       = Phase::Done;
                     self.scan_rx     = None;
+                    self.scan_cancel = None;
                     self.status_text = format!("Error: {e}");
                     self.dot_state   = DotState::Error;
                 }

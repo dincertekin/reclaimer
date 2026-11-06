@@ -778,6 +778,7 @@ impl ReclaimerApp {
             ("Bytes",  fmt_num(file.size_bytes as u64)),
             ("Sector", fmt_num(file.sector)),
             ("Offset", fmt_hex(file.offset)),
+            ("Integrity", if file.complete { "Intact" } else { "Partial" }.to_string()),
         ] {
             ui.horizontal(|ui| {
                 ui.add_space(22.0);

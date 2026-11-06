@@ -27,6 +27,8 @@ pub struct FoundFile {
     pub size_bytes: usize,
     pub filename:   String,
     pub category:   Category,
+    /// False when the file's end was never found (truncated or fragmented).
+    pub complete:   bool,
 }
 
 #[derive(Clone, Debug, PartialEq)]
@@ -40,7 +42,7 @@ pub enum Category {
 impl Category {
     pub fn from_ext(ext: &str) -> Self {
         match ext.to_lowercase().as_str() {
-            "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "webp" | "heic" | "raw" | "cr2"
+            "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "webp" | "heic" | "avif" | "raw" | "cr2"
             | "nef" | "arw" | "dng" => Category::Image,
             "mp4" | "mov" | "avi" | "mkv" | "mp3" | "wav" | "aac" | "flac" | "ogg" | "m4a"
             | "m4v" | "wma" | "wmv" | "3gp" => Category::Media,
