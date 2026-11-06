@@ -12,6 +12,15 @@ fn fmt_size(bytes: usize) -> String {
     }
 }
 
+/// Drive capacity the way Finder shows it: decimal units, no decimals.
+fn fmt_capacity(bytes: u64) -> String {
+    match bytes {
+        b if b >= 1_000_000_000_000 => format!("{:.1} TB", b as f64 / 1e12),
+        b if b >= 1_000_000_000     => format!("{:.0} GB", b as f64 / 1e9),
+        b                           => format!("{:.0} MB", b as f64 / 1e6),
+    }
+}
+
 fn fmt_hex(n: u64) -> String {
     format!("0x{:08X}", n)
 }
@@ -182,11 +191,11 @@ fn icon_phone(painter: &egui::Painter, bounds: egui::Rect, color: Color32) {
 }
 
 impl ReclaimerApp {
-    pub(super) fn draw_toolbar(&self, ui: &mut egui::Ui) -> bool {
+    pub(super) fn draw_toolbar(&self, ui: &mut egui::Ui) -> Option<ToolbarAction> {
         let toolbar_bounds = ui.max_rect();
         ui.painter().hline(toolbar_bounds.x_range(), toolbar_bounds.bottom() - 1.0, Stroke::new(1.0, BORDER));
 
-        let mut open_clicked = false;
+        let mut action = None;
 
         ui.with_layout(egui::Layout::left_to_right(egui::Align::Center), |ui| {
             ui.add_space(16.0);
@@ -195,7 +204,7 @@ impl ReclaimerApp {
             ui.add(egui::Separator::default().vertical());
             ui.add_space(10.0);
 
-            let load_btn_width  = 140.0;
+            let load_btn_width  = 290.0;
             let breadcrumb_width = (ui.available_width() - load_btn_width).max(0.0);
 
             ui.allocate_ui_with_layout(
@@ -206,36 +215,84 @@ impl ReclaimerApp {
                     ui.add_space(5.0);
                     ui.label(RichText::new("/").color(TEXT_DIM).font(FontId::monospace(11.0)));
                     ui.add_space(5.0);
-                    let (name, color) = match &self.image_path {
-                        Some(path) => (
-                            path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
-                            TEXT,
-                        ),
-                        None => ("no image loaded".into(), TEXT_DIM),
+                    let (name, color) = match &self.source {
+                        Some(source) => (source.name(), TEXT),
+                        None => ("nothing selected".into(), TEXT_DIM),
                     };
                     ui.label(RichText::new(name).color(color).font(FontId::monospace(13.0)));
                 },
             );
 
-            let load_btn_result = ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
                 ui.add_space(16.0);
-                ui.add_enabled(
-                    !matches!(self.phase, Phase::Scanning),
-                    egui::Button::new(RichText::new("Load Image").color(TEXT_SEC).size(15.0))
-                        .fill(PANEL_RAISED)
-                        .stroke(Stroke::new(1.0, BORDER_MID)),
-                ).clicked()
+                let idle = !matches!(self.phase, Phase::Scanning);
+                ui.add_enabled_ui(idle, |ui| {
+                    if ui.add(
+                        egui::Button::new(RichText::new("Load Image").color(TEXT_SEC).size(15.0))
+                            .fill(PANEL_RAISED)
+                            .stroke(Stroke::new(1.0, BORDER_MID)),
+                    ).clicked() {
+                        action = Some(ToolbarAction::OpenImage);
+                    }
+                    ui.add_space(4.0);
+                    let menu = ui.menu_button(RichText::new("Choose Drive").color(TEXT_SEC).size(15.0), |ui| {
+                        self.draw_drive_menu(ui)
+                    });
+                    // Refresh the list every time the menu is opened.
+                    if menu.response.clicked() {
+                        action = Some(ToolbarAction::ListDrives);
+                    }
+                    if let Some(Some(index)) = menu.inner {
+                        action = Some(ToolbarAction::ChooseDrive(index));
+                    }
+                });
             });
-
-            open_clicked = load_btn_result.inner;
         });
 
-        open_clicked
+        action
+    }
+
+    /// Returns the index of the drive clicked, if any.
+    fn draw_drive_menu(&self, ui: &mut egui::Ui) -> Option<usize> {
+        ui.set_min_width(300.0);
+        let drives = match &self.drives {
+            _ if self.drives_rx.is_some() => {
+                ui.horizontal(|ui| { ui.spinner(); ui.label("Looking for drives\u{2026}"); });
+                return None;
+            }
+            None => return None,
+            Some(Err(e)) => {
+                ui.label(RichText::new(format!("Couldn't list drives: {e}")).color(DANGER));
+                return None;
+            }
+            Some(Ok(drives)) if drives.is_empty() => {
+                ui.label(RichText::new("No drives found").color(TEXT_DIM));
+                return None;
+            }
+            Some(Ok(drives)) => drives,
+        };
+
+        let mut chosen = None;
+        for (index, drive) in drives.iter().enumerate() {
+            let kind = if drive.removable { "External" } else { "Internal" };
+            let detail = format!("{} \u{00B7} {} \u{00B7} {}", fmt_capacity(drive.size), kind, drive.model);
+            let response = ui.add(egui::Button::new(
+                RichText::new(format!("{}\n{}", drive.name, detail)).color(TEXT).size(14.0),
+            ).frame(false));
+            if response.clicked() {
+                chosen = Some(index);
+                ui.close();
+            }
+            ui.add_space(4.0);
+        }
+        chosen
     }
 }
 
 impl ReclaimerApp {
-    pub(super) fn draw_statusbar(&self, ui: &mut egui::Ui) {
+    /// Returns true when the output folder was clicked.
+    pub(super) fn draw_statusbar(&self, ui: &mut egui::Ui) -> bool {
+        let mut change_folder = false;
         let statusbar_bounds = ui.max_rect();
         ui.painter().hline(statusbar_bounds.x_range(), statusbar_bounds.top(), Stroke::new(1.0, BORDER));
 
@@ -267,18 +324,19 @@ impl ReclaimerApp {
                 ui.label(RichText::new(format!("{:.0}%", progress * 100.0)).color(ACCENT).font(FontId::monospace(13.0)).strong());
             }
 
-            if matches!(self.phase, Phase::Scanning | Phase::Done) {
-                ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
-                    ui.add_space(14.0);
-                    let right_label = if self.phase == Phase::Done {
-                        "recovered/".to_string()
-                    } else {
-                        format!("{} found", self.found_count)
-                    };
-                    ui.label(RichText::new(right_label).color(TEXT_DIM).font(FontId::monospace(13.0)));
-                });
-            }
+            ui.with_layout(egui::Layout::right_to_left(egui::Align::Center), |ui| {
+                ui.add_space(14.0);
+                if self.phase == Phase::Scanning {
+                    ui.label(RichText::new(format!("{} found", self.found_count)).color(TEXT_DIM).font(FontId::monospace(13.0)));
+                } else {
+                    let label = format!("Save to {}", self.output_dir.display());
+                    let response = ui.add(egui::Button::new(RichText::new(label).color(TEXT_DIM).size(13.0)).frame(false))
+                        .on_hover_text("Choose where recovered files are saved");
+                    change_folder = response.clicked();
+                }
+            });
         });
+        change_folder
     }
 }
 
@@ -572,15 +630,12 @@ impl ReclaimerApp {
                     ui.vertical_centered(|ui| {
                         match self.phase {
                             Phase::Idle => {
-                                ui.label(RichText::new("Load a disk image to begin").color(TEXT_SEC).size(20.0));
+                                ui.label(RichText::new("Choose a drive or load a disk image to begin").color(TEXT_SEC).size(20.0));
                                 ui.add_space(10.0);
-                                ui.label(RichText::new("or drop a .img file anywhere in this window").color(TEXT_DIM).size(14.0));
+                                ui.label(RichText::new("or drop an image file anywhere in this window").color(TEXT_DIM).size(14.0));
                             }
                             Phase::Ready => {
-                                let image_name = self.image_path.as_ref()
-                                    .and_then(|p| p.file_name())
-                                    .map(|n| n.to_string_lossy().into_owned())
-                                    .unwrap_or_default();
+                                let image_name = self.source.as_ref().map(Source::name).unwrap_or_default();
                                 ui.label(RichText::new(&image_name).color(TEXT).font(FontId::monospace(16.0)).strong());
                                 ui.add_space(6.0);
                                 ui.label(RichText::new("Ready to scan").color(TEXT_DIM).size(15.0));

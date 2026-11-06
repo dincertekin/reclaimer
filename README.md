@@ -12,14 +12,17 @@ A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk im
 
 ## What Works Right Now
 
-- Load a `.img`, `.dd`, `.raw`, or any raw disk image via the file picker or drag-and-drop
+- Scan a physical drive — internal disks, USB sticks, SD cards — on macOS, Windows and Linux
+- Or load a `.img`, `.dd`, `.raw`, or any raw disk image via the file picker or drag-and-drop
+- Drives are only ever opened read-only; unreadable (bad) sectors are skipped instead of stopping the scan
 - Fast scanning — reads in large aligned chunks (about 1 GB in under a second from cache)
 - Structure-aware carving — JPEG (JFIF and EXIF), PNG, GIF, MP4, MOV, HEIC, AVIF, PDF, ZIP, DOCX/XLSX/PPTX, SQLite
 - Each file reports whether it was recovered intact or only partially
 - Results table with filename, type badge, size, sector, and hex offset
 - Detail panel for each recovered file with Open File and Copy Path actions
 - Sidebar filter by file type (Images, Documents, Media, Other)
-- Recovered files saved to `recovered/` relative to your working directory
+- Recovered files go to a folder you choose (default `~/Documents/Reclaimer`), one subfolder per scan
+- Refuses to save onto the drive being scanned, since that could overwrite what you want back
 
 ---
 
@@ -49,7 +52,8 @@ After carving a file, the scan jumps past it rather than re-reading it.
 src/
 ├── main.rs              # eframe entry point, loads the Dock icon
 ├── source/
-│   └── mod.rs           # BlockSource trait + ImageFile — where bytes come from
+│   ├── mod.rs           # BlockSource trait + FileSource — where bytes come from
+│   └── drives/          # list and open physical drives: macos.rs, windows.rs, linux.rs
 ├── scanner/
 │   ├── mod.rs           # scan() finds files, export() saves one
 │   ├── window.rs        # read-ahead buffer: few large aligned reads
@@ -71,6 +75,8 @@ src/
 | `rfd 0.15` | Native OS file picker (NSOpenPanel on macOS) |
 | `open 5` | Opens recovered files with the OS default app |
 | `image 0.25` | Decodes the app icon PNG for the macOS Dock |
+| `plist`, `libc` (macOS) | Read `diskutil` output; disk ioctls and `authopen` |
+| `windows-sys` (Windows) | Drive geometry and model via `DeviceIoControl` |
 
 ---
 
@@ -107,9 +113,20 @@ Run the tests with `cargo test`. Among other things, they check that `test.img` 
 ## Roadmap
 
 - [ ] NTFS MFT parsing — read deleted file metadata (name, path, dates) from the Master File Table
-- [ ] Physical disk and USB drive scanning — enumerate `/dev/rdiskN` on macOS, `\\.\PhysicalDriveN` on Windows
 - [ ] Filter text input wired to the search box
-- [ ] Configurable output directory
+- [ ] Ask for administrator rights automatically on Windows and Linux (macOS already does)
+
+---
+
+## Reading Drives
+
+| Platform | Drives | Permission |
+|----------|--------|------------|
+| macOS | `/dev/rdiskN` via `diskutil` | The system password prompt (`authopen`) appears when you scan |
+| Windows | `\\.\PhysicalDriveN` | Run Reclaimer as administrator |
+| Linux | `/dev/sdX`, `/dev/nvmeXnY`, `/dev/mmcblkN` | Run with `sudo`, or join the `disk` group |
+
+The internal SSD in Apple silicon and T2 Macs is always hardware-encrypted, so raw reads of it return encrypted data. Carving works on external drives, USB sticks, SD cards and disk images.
 
 ---
 

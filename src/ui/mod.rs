@@ -1,3 +1,4 @@
+use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc};
@@ -8,11 +9,19 @@ mod render;
 mod scan;
 
 use types::*;
+use crate::source::drives::{self, Drive};
+
+const OUTPUT_DIR_KEY: &str = "output_dir";
 
 pub struct ReclaimerApp {
     // pub(crate) makes these fields accessible to render.rs and scan.rs,
     // which add their own impl blocks to this struct in sibling modules.
-    pub(crate) image_path:      Option<PathBuf>,
+    pub(crate) source:          Option<Source>,
+    /// Drives found by the last listing; `None` until listed.
+    pub(crate) drives:          Option<io::Result<Vec<Drive>>>,
+    pub(crate) drives_rx:       Option<mpsc::Receiver<io::Result<Vec<Drive>>>>,
+    /// Parent folder; each scan saves into its own subfolder of it.
+    pub(crate) output_dir:      PathBuf,
     pub(crate) phase:           Phase,
     pub(crate) found_files:     Vec<FoundFile>,
     pub(crate) selected_idx:    Option<usize>,
@@ -26,13 +35,20 @@ pub struct ReclaimerApp {
     pub(crate) scan_rx:         Option<mpsc::Receiver<ScanMsg>>,
     pub(crate) scan_cancel:     Option<Arc<AtomicBool>>,
     pub(crate) file_rx:         Option<mpsc::Receiver<Option<PathBuf>>>,
+    pub(crate) folder_rx:       Option<mpsc::Receiver<Option<PathBuf>>>,
 }
 
 impl ReclaimerApp {
     pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
         setup_visuals(&cc.egui_ctx);
+        let output_dir = cc.storage
+            .and_then(|s| eframe::get_value(s, OUTPUT_DIR_KEY))
+            .unwrap_or_else(default_output_dir);
         Self {
-            image_path:      None,
+            source:          None,
+            drives:          None,
+            drives_rx:       None,
+            output_dir,
             phase:           Phase::Idle,
             found_files:     Vec::new(),
             selected_idx:    None,
@@ -46,6 +62,7 @@ impl ReclaimerApp {
             scan_rx:         None,
             scan_cancel:     None,
             file_rx:         None,
+            folder_rx:       None,
         }
     }
 
@@ -94,19 +111,46 @@ impl ReclaimerApp {
         });
     }
 
-    fn load_image(&mut self, path: PathBuf) {
+    fn choose_output_folder(&mut self) {
+        let (tx, rx) = mpsc::channel();
+        self.folder_rx = Some(rx);
+        let start = self.output_dir.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(rfd::FileDialog::new().set_directory(start).pick_folder());
+        });
+    }
+
+    /// Listing drives shells out to the OS, so it runs off the UI thread.
+    fn list_drives(&mut self, ctx: &egui::Context) {
+        if self.drives_rx.is_some() {
+            return;
+        }
+        let (tx, rx) = mpsc::channel();
+        self.drives_rx = Some(rx);
+        let ctx = ctx.clone();
+        std::thread::spawn(move || {
+            let _ = tx.send(drives::list());
+            ctx.request_repaint();
+        });
+    }
+
+    fn set_source(&mut self, source: Source) {
         self.cancel_scan();
-        self.image_path   = Some(path);
+        self.status_text  = format!("{} \u{2014} ready to scan", source.name());
+        self.source       = Some(source);
         self.found_files  = Vec::new();
         self.selected_idx = None;
         self.phase        = Phase::Ready;
-        self.status_text  = "Image loaded \u{2014} ready to scan".into();
         self.dot_state    = DotState::Idle;
+    }
+
+    fn load_image(&mut self, path: PathBuf) {
+        self.set_source(Source::Image(path));
     }
 
     fn open_result(&self, idx: usize) {
         if let Some(file) = self.found_files.get(idx) {
-            let _ = open::that(PathBuf::from("recovered").join(&file.filename));
+            let _ = open::that(&file.path);
         }
     }
 
@@ -124,6 +168,22 @@ impl ReclaimerApp {
             if let Some(path) = maybe_path {
                 self.load_image(path);
             }
+        }
+
+        if let Some(ref rx) = self.folder_rx
+            && let Ok(maybe_folder) = rx.try_recv()
+        {
+            self.folder_rx = None;
+            if let Some(folder) = maybe_folder {
+                self.output_dir = folder;
+            }
+        }
+
+        if let Some(ref rx) = self.drives_rx
+            && let Ok(result) = rx.try_recv()
+        {
+            self.drives_rx = None;
+            self.drives = Some(result);
         }
 
         let mut msgs = Vec::new();
@@ -180,6 +240,10 @@ impl ReclaimerApp {
 }
 
 impl eframe::App for ReclaimerApp {
+    fn save(&mut self, storage: &mut dyn eframe::Storage) {
+        eframe::set_value(storage, OUTPUT_DIR_KEY, &self.output_dir);
+    }
+
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
         ui.ctx().send_viewport_cmd(egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark));
 
@@ -187,16 +251,17 @@ impl eframe::App for ReclaimerApp {
 
         // All draw_* methods take &self (immutable). Actions are collected as
         // return values and applied to &mut self after all rendering is done.
-        let open_clicked = egui::Panel::top("toolbar")
+        let toolbar_action = egui::Panel::top("toolbar")
             .exact_size(48.0)
             .frame(egui::Frame::NONE.fill(SIDEBAR_BG))
             .show_inside(ui, |ui| self.draw_toolbar(ui))
             .inner;
 
-        egui::Panel::bottom("statusbar")
+        let change_folder = egui::Panel::bottom("statusbar")
             .exact_size(34.0)
             .frame(egui::Frame::NONE.fill(SIDEBAR_BG))
-            .show_inside(ui, |ui| self.draw_statusbar(ui));
+            .show_inside(ui, |ui| self.draw_statusbar(ui))
+            .inner;
 
         let (filter_change, result_action) = egui::CentralPanel::default()
             .frame(egui::Frame::NONE.fill(BG))
@@ -222,7 +287,19 @@ impl eframe::App for ReclaimerApp {
             );
         }
 
-        if open_clicked { self.open_file_dialog(); }
+        match toolbar_action {
+            Some(ToolbarAction::OpenImage)          => self.open_file_dialog(),
+            Some(ToolbarAction::ListDrives)         => self.list_drives(ui.ctx()),
+            Some(ToolbarAction::ChooseDrive(index)) => {
+                let drive = match &self.drives {
+                    Some(Ok(list)) => list.get(index).cloned(),
+                    _ => None,
+                };
+                if let Some(drive) = drive { self.set_source(Source::Drive(drive)); }
+            }
+            None => {}
+        }
+        if change_folder { self.choose_output_folder(); }
         if let Some(new_filter) = filter_change {
             self.active_filter = new_filter;
             self.selected_idx  = None;
@@ -237,7 +314,7 @@ impl eframe::App for ReclaimerApp {
                 ResultAction::Open(idx)      => self.open_result(idx),
                 ResultAction::CopyPath(idx)  => {
                     if let Some(file) = self.found_files.get(idx) {
-                        ui.ctx().copy_text(format!("recovered/{}", file.filename));
+                        ui.ctx().copy_text(file.path.display().to_string());
                     }
                 }
             }

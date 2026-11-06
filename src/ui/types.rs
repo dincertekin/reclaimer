@@ -1,4 +1,6 @@
+use std::path::{Path, PathBuf};
 use eframe::egui::Color32;
+use crate::source::drives::Drive;
 
 // Dim-slate palette: comfortable at any hour without being harsh at midnight
 // or washed out under bright daylight. Backgrounds sit at ~8-15% luminosity;
@@ -26,6 +28,8 @@ pub struct FoundFile {
     pub offset:     u64,
     pub size_bytes: usize,
     pub filename:   String,
+    /// Where the recovered copy was saved.
+    pub path:       PathBuf,
     pub category:   Category,
     /// False when the file's end was never found (truncated or fragmented).
     pub complete:   bool,
@@ -87,6 +91,35 @@ impl DotState {
             DotState::Error    => DANGER,
         }
     }
+}
+
+/// What we scan: an image file or a whole drive.
+#[derive(Clone, Debug, PartialEq)]
+pub enum Source {
+    Image(PathBuf),
+    Drive(Drive),
+}
+
+impl Source {
+    pub fn name(&self) -> String {
+        match self {
+            Source::Image(path) => path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            Source::Drive(drive) => drive.name.clone(),
+        }
+    }
+}
+
+/// Default home for recovered files: ~/Documents/Reclaimer.
+pub fn default_output_dir() -> PathBuf {
+    std::env::home_dir()
+        .map(|home| home.join("Documents").join("Reclaimer"))
+        .unwrap_or_else(|| Path::new("Recovered").to_path_buf())
+}
+
+pub enum ToolbarAction {
+    OpenImage,
+    ListDrives,
+    ChooseDrive(usize),
 }
 
 pub enum ResultAction {

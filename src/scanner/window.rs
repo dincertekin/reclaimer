@@ -68,15 +68,37 @@ impl<'a> Window<'a> {
     }
 
     fn fill(&mut self, offset: u64, n: usize) -> io::Result<()> {
-        let block   = self.src.block_size();
-        let aligned = offset - offset % block;
-        let need    = (offset - aligned) as usize + n;
-        let want    = need.max(WINDOW_SIZE).next_multiple_of(block as usize);
+        let block     = self.src.block_size();
+        let aligned   = offset - offset % block;
+        let need      = (offset - aligned) as usize + n;
+        // Never ask a device for blocks past its end.
+        let remaining = (self.size - aligned).next_multiple_of(block) as usize;
+        let want      = need.max(WINDOW_SIZE).next_multiple_of(block as usize).min(remaining);
         self.buf.resize(want, 0);
-        let got = self.src.read_at(aligned, &mut self.buf)?;
+        let got = match self.src.read_at(aligned, &mut self.buf) {
+            Ok(got) => got,
+            Err(e)  => self.read_around_bad_blocks(aligned, block as usize, e)?,
+        };
         self.buf.truncate(got);
         self.start = aligned;
         Ok(())
+    }
+
+    /// Failing drives have blocks that can't be read. Read block by block
+    /// and leave those zeroed, so one bad spot doesn't end the whole scan.
+    /// Only if nothing at all is readable (drive unplugged) is it an error.
+    fn read_around_bad_blocks(&mut self, offset: u64, block: usize, first_error: io::Error) -> io::Result<usize> {
+        let mut readable = false;
+        for (i, chunk) in self.buf.chunks_mut(block).enumerate() {
+            match self.src.read_at(offset + (i * block) as u64, chunk) {
+                Ok(n) => {
+                    readable = true;
+                    chunk[n..].fill(0);
+                }
+                Err(_) => chunk.fill(0),
+            }
+        }
+        if readable { Ok(self.buf.len()) } else { Err(first_error) }
     }
 }
 
@@ -99,6 +121,34 @@ mod tests {
         assert_eq!(w.bytes(total - 2, 10).unwrap().len(), 2);
         assert!(w.bytes(total, 10).unwrap().is_empty());
         assert_eq!(w.array::<4>(total - 3).unwrap(), None);
+    }
+
+    /// Fails any read that touches `bad`.
+    struct Flaky { data: Vec<u8>, bad: std::ops::Range<u64> }
+
+    impl BlockSource for Flaky {
+        fn size(&self) -> u64 { self.data.len() as u64 }
+        fn read_at(&mut self, offset: u64, buf: &mut [u8]) -> io::Result<usize> {
+            if offset < self.bad.end && offset + buf.len() as u64 > self.bad.start {
+                return Err(io::Error::other("bad sector"));
+            }
+            self.data.read_at(offset, buf)
+        }
+    }
+
+    #[test]
+    fn bad_blocks_read_as_zeros_and_the_rest_survives() {
+        let mut src = Flaky { data: vec![7; 4096], bad: 1024..1536 };
+        let mut w = Window::new(&mut src);
+        assert_eq!(w.bytes(1000, 4).unwrap(), &[7, 7, 7, 7]);
+        assert_eq!(w.bytes(1024, 4).unwrap(), &[0, 0, 0, 0]);
+        assert_eq!(w.bytes(1536, 4).unwrap(), &[7, 7, 7, 7]);
+    }
+
+    #[test]
+    fn unreadable_source_is_an_error() {
+        let mut src = Flaky { data: vec![7; 4096], bad: 0..4096 };
+        assert!(Window::new(&mut src).bytes(0, 4).is_err());
     }
 
     #[test]
