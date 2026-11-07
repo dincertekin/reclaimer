@@ -1,0 +1,113 @@
+name: Release
+
+# Push a version tag (git tag v0.1.0 && git push --tags) to build Reclaimer
+# for macOS, Windows and Linux and attach the apps to a new GitHub release,
+# with the list of changes. The README links to the latest one.
+on:
+  push:
+    tags: ["v*"]
+
+permissions:
+  contents: write
+
+jobs:
+  # A draft release first: the apps are added to it, and it's only published
+  # (visible to people) once all three are there.
+  draft:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      # The app shows its version, so the tag and Cargo.toml must agree.
+      - name: Check the version
+        run: |
+          version=$(grep -m1 '^version' Cargo.toml | cut -d'"' -f2)
+          test "v$version" = "$GITHUB_REF_NAME" || { echo "Tag $GITHUB_REF_NAME doesn't match Cargo.toml version $version"; exit 1; }
+      - name: Create the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          # Every release starts with which file to download and how to open
+          # it the first time. GitHub's list of changes follows.
+          version="${GITHUB_REF_NAME#v}"
+          cat > downloads.md <<'EOF'
+          ## Which file do I need?
+
+          | Your computer | Download |
+          |---|---|
+          | Mac (Apple silicon or Intel) | `Reclaimer-macOS.zip` |
+          | Windows | `Reclaimer-Windows.exe` |
+          | Linux (Intel or AMD) | `Reclaimer-Linux-x86_64.tar.gz` |
+
+          **Opening it the first time.** These builds aren't signed by Apple or Microsoft yet, so your computer asks first:
+
+          - **Mac:** unzip, drag Reclaimer to Applications, then right-click it and choose **Open**. If macOS still refuses, open **System Settings → Privacy & Security** and click **Open Anyway**.
+          - **Windows:** if you see "Windows protected your PC", click **More info**, then **Run anyway**. To scan a drive, right-click Reclaimer and choose **Run as administrator**.
+          - **Linux:** unpack the folder and run `./install.sh`: Reclaimer appears in your applications menu.
+          EOF
+          # A draft left by an earlier, failed run is reused.
+          gh release view "$GITHUB_REF_NAME" >/dev/null 2>&1 \
+            || gh release create "$GITHUB_REF_NAME" --draft --verify-tag --notes-file downloads.md --generate-notes --title "Reclaimer $version"
+
+  apps:
+    needs: draft
+    runs-on: ${{ matrix.os }}
+    strategy:
+      fail-fast: false
+      matrix:
+        include:
+          # One app for both Apple silicon and Intel Macs.
+          - os: macos-latest
+            asset: Reclaimer-macOS.zip
+          - os: windows-latest
+            asset: Reclaimer-Windows.exe
+          # Built on an older Ubuntu, so it also runs on older distributions.
+          - os: ubuntu-22.04
+            asset: Reclaimer-Linux-x86_64.tar.gz
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v7
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: ${{ runner.os == 'macOS' && 'aarch64-apple-darwin,x86_64-apple-darwin' || '' }}
+      - uses: Swatinem/rust-cache@v2
+      - name: Build (macOS)
+        if: runner.os == 'macOS'
+        run: |
+          ./packaging/macos/build-app.sh --universal
+          # ditto keeps the app's signature intact inside the zip.
+          ditto -c -k --keepParent target/release/Reclaimer.app ${{ matrix.asset }}
+      - name: Build (Windows)
+        if: runner.os == 'Windows'
+        env:
+          # Put the C runtime inside the .exe, so it runs on computers without
+          # Visual Studio's runtime ("VCRUNTIME140.dll is missing"). With an
+          # explicit --target, this doesn't apply to build scripts.
+          RUSTFLAGS: -C target-feature=+crt-static
+        run: |
+          cargo build --release --target x86_64-pc-windows-msvc
+          cp target/x86_64-pc-windows-msvc/release/Reclaimer.exe ${{ matrix.asset }}
+      - name: Build (Linux)
+        if: runner.os == 'Linux'
+        run: |
+          cargo build --release
+          folder=Reclaimer-Linux-x86_64
+          mkdir "$folder"
+          cp target/release/Reclaimer packaging/linux/install.sh packaging/linux/reclaimer.desktop "$folder/"
+          cp icons/icon.png "$folder/reclaimer.png"
+          tar czf ${{ matrix.asset }} "$folder"
+      - name: Add the app to the draft release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release upload "$GITHUB_REF_NAME" ${{ matrix.asset }} --clobber
+
+  publish:
+    needs: apps
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+      - name: Publish the release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: gh release edit "$GITHUB_REF_NAME" --draft=false --latest

@@ -16,3 +16,4 @@ Key facts:
 - [How it works](https://github.com/dincertekin/reclaimer/blob/main/docs/how-it-works.md): recovery stages, file systems, carving, phones, limits
 - [Developing](https://github.com/dincertekin/reclaimer/blob/main/docs/development.md): building, project structure, tests
 - [Contributing](https://github.com/dincertekin/reclaimer/blob/main/CONTRIBUTING.md)
+- [Downloads](https://github.com/dincertekin/reclaimer/releases/latest): Reclaimer-macOS.zip (Apple silicon and Intel), Reclaimer-Windows.exe, Reclaimer-Linux-x86_64.tar.gz

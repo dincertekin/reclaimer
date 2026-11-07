@@ -1,16 +1,33 @@
 #!/bin/sh
 # Builds target/release/Reclaimer.app — double-click to run, drag to
 # Applications to install. Needs only Xcode's command line tools.
+#
+#   ./packaging/macos/build-app.sh               for this Mac
+#   ./packaging/macos/build-app.sh --universal   for Apple silicon and Intel Macs
+#                                                 (what releases ship)
 set -eu
 cd "$(dirname "$0")/../.."
 
-cargo build --release
+if [ "${1:-}" = "--universal" ]; then
+    # One program holding both an Apple silicon and an Intel version.
+    rustup target add aarch64-apple-darwin x86_64-apple-darwin
+    cargo build --release --target aarch64-apple-darwin
+    cargo build --release --target x86_64-apple-darwin
+    BINARY=target/release/Reclaimer-universal
+    mkdir -p target/release
+    lipo -create -output "$BINARY" \
+        target/aarch64-apple-darwin/release/Reclaimer \
+        target/x86_64-apple-darwin/release/Reclaimer
+else
+    cargo build --release
+    BINARY=target/release/Reclaimer
+fi
 VERSION=$(sed -n 's/^version *= *"\(.*\)"/\1/p' Cargo.toml | head -n 1)
 APP=target/release/Reclaimer.app
 
 rm -rf "$APP"
 mkdir -p "$APP/Contents/MacOS" "$APP/Contents/Resources"
-cp target/release/Reclaimer "$APP/Contents/MacOS/Reclaimer"
+cp "$BINARY" "$APP/Contents/MacOS/Reclaimer"
 cp icons/icon.icns "$APP/Contents/Resources/Reclaimer.icns"
 
 cat > "$APP/Contents/Info.plist" <<PLIST

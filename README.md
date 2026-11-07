@@ -46,19 +46,21 @@ remembers them.
 
 ## Get Reclaimer
 
-Ready-made downloads for macOS, Windows and Linux are on the way. Until
-then, Reclaimer builds with one command. Install [Rust](https://rustup.rs),
-then:
+| Your computer | Download |
+|---------------|----------|
+| **Mac** (Apple silicon or Intel) | [Reclaimer-macOS.zip](https://github.com/dincertekin/reclaimer/releases/latest/download/Reclaimer-macOS.zip) — unzip and drag to Applications |
+| **Windows** | [Reclaimer-Windows.exe](https://github.com/dincertekin/reclaimer/releases/latest/download/Reclaimer-Windows.exe) |
+| **Linux** (Intel or AMD) | [Reclaimer-Linux-x86_64.tar.gz](https://github.com/dincertekin/reclaimer/releases/latest/download/Reclaimer-Linux-x86_64.tar.gz) — unpack and run `./install.sh` |
 
-```bash
-git clone https://github.com/dincertekin/reclaimer
-cd reclaimer
-./packaging/macos/build-app.sh      # macOS: makes Reclaimer.app
-cargo build --release               # Windows: makes target\release\Reclaimer.exe
-./packaging/linux/install.sh        # Linux: installs it with a menu entry
-```
+The apps aren't signed by Apple or Microsoft yet, so the first time:
+on a **Mac**, right-click Reclaimer and choose **Open** (or click **Open
+Anyway** in System Settings → Privacy & Security); on **Windows**, click
+**More info**, then **Run anyway**. All downloads are on the
+[releases page](https://github.com/dincertekin/reclaimer/releases/latest).
 
-Or just `cargo run` to try it.
+**Building it yourself:** install [Rust](https://rustup.rs), clone this
+repository, and run `cargo run`. [Developing Reclaimer](docs/development.md)
+has the details.
 
 **Lost something?** Stop using that card, drive or phone until you've
 recovered it. New files can land on the space your deleted ones occupy.
@@ -128,7 +130,7 @@ with its output. Platform-specific notes are in
 
 ## Roadmap
 
-- Ready-made downloads for macOS, Windows and Linux
+- Signed and notarized apps, so they open without a warning
 - Encrypted iPhone backups
 - Very fragmented NTFS files (records that spill into extension records)
 - Asking for administrator rights automatically on Windows and Linux

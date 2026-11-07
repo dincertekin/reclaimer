@@ -98,8 +98,22 @@ regenerates `icon.png`, `icon.icns`, `icon.ico` and
 | Windows | `cargo build --release` | `target\release\Reclaimer.exe`, icon embedded, no console window |
 | Linux | `./packaging/linux/install.sh` | installs to `~/.local` with a menu entry and icon |
 
-The macOS app is signed ad hoc, not notarized: on another Mac, open it the
-first time with right-click → Open.
+`./packaging/macos/build-app.sh --universal` makes one app for both Apple
+silicon and Intel Macs. The macOS app is signed ad hoc, not notarized: on
+another Mac, open it the first time with right-click → Open.
+
+## Releasing
+
+Raise `version` in `Cargo.toml`, commit, then tag that version:
+
+```bash
+git tag v0.1.0 && git push --tags
+```
+
+The [Release workflow](../.github/workflows/release.yml) builds the Mac,
+Windows and Linux apps, attaches them to a new GitHub release with the list
+of changes, and publishes it once all three are there. The README's download
+links always point to the latest release.
 
 To check Windows or Linux builds from a Mac without a C cross-compiler:
 
