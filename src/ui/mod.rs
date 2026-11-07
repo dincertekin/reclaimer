@@ -42,6 +42,7 @@ pub struct ReclaimerApp {
     phase:         Phase,
     found:         Vec<FoundFile>,
     progress:      (u64, u64), // bytes done, total
+    stage:         &'static str,
     started:       Instant,
     stopped:       bool,
     scan_folder:   Option<PathBuf>,
@@ -76,6 +77,7 @@ impl ReclaimerApp {
             phase:         Phase::Choose,
             found:         Vec::new(),
             progress:      (0, 0),
+            stage:         "",
             started:       Instant::now(),
             stopped:       false,
             scan_folder:   None,
@@ -173,6 +175,7 @@ impl ReclaimerApp {
                 query.is_empty()
                     || f.filename.to_lowercase().contains(&query)
                     || f.kind.to_lowercase().contains(&query)
+                    || f.folder.as_ref().is_some_and(|d| d.to_lowercase().contains(&query))
             })
             .map(|(i, _)| i)
             .collect()
@@ -239,6 +242,7 @@ impl ReclaimerApp {
                 ScanMsg::Started { folder } => self.scan_folder = Some(folder),
                 ScanMsg::Progress { done, total } => self.progress = (done, total),
                 ScanMsg::Found(file) => self.found.push(file),
+                ScanMsg::Stage(stage) => self.stage = stage,
                 ScanMsg::Done => {
                     self.phase = Phase::Done;
                     self.scan_rx = None;

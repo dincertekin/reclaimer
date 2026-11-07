@@ -3,7 +3,7 @@
 //! reads — millions of 512-byte syscalls become a handful of 4 MB ones.
 
 use std::io;
-use crate::source::BlockSource;
+use super::BlockSource;
 
 const WINDOW_SIZE: usize = 4 << 20;
 const SEARCH_CHUNK: usize = 1 << 20;
@@ -19,6 +19,11 @@ impl<'a> Window<'a> {
     pub fn new(src: &'a mut dyn BlockSource) -> Self {
         let size = src.size();
         Self { src, size, start: 0, buf: Vec::new() }
+    }
+
+    /// Total size of the source in bytes.
+    pub fn size(&self) -> u64 {
+        self.size
     }
 
     /// Up to `n` bytes at `offset`. Shorter only at the end of the source.

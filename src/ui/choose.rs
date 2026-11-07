@@ -16,6 +16,7 @@ struct Card {
     title:    String,
     detail:   String,
     selected: bool,
+    enabled:  bool,
     pick:     Pick,
 }
 
@@ -41,17 +42,22 @@ impl ReclaimerApp {
         let mut cards: Vec<Card> = self.drives.iter().enumerate().map(|(i, drive)| Card {
             icon:     if drive.removable { Icon::Card } else { Icon::Drive },
             title:    drive.name.clone(),
-            detail:   format!("{} \u{00B7} {}", fmt_size(drive.size), if drive.removable { "External" } else { "Internal" }),
+            detail:   format!(
+                "{} \u{00B7} {}",
+                fmt_size(drive.size),
+                if drive.encrypted { "Encrypted" } else if drive.removable { "External" } else { "Internal" },
+            ),
             selected: matches!(&self.source, Some(Source::Drive(d)) if d.path == drive.path),
+            enabled:  !drive.encrypted,
             pick:     Pick::Drive(i),
         }).collect();
 
         let image = match &self.source {
             Some(source @ Source::Image(_)) => Card {
-                icon: Icon::DiskImage, title: source.name(), detail: "Disk image".into(), selected: true, pick: Pick::Image,
+                icon: Icon::DiskImage, title: source.name(), detail: "Disk image".into(), selected: true, enabled: true, pick: Pick::Image,
             },
             _ => Card {
-                icon: Icon::DiskImage, title: "Disk Image\u{2026}".into(), detail: "Choose a file".into(), selected: false, pick: Pick::Image,
+                icon: Icon::DiskImage, title: "Disk Image\u{2026}".into(), detail: "Choose a file".into(), selected: false, enabled: true, pick: Pick::Image,
             },
         };
         cards.push(image);
@@ -84,7 +90,7 @@ impl ReclaimerApp {
                 ui.spacing_mut().item_spacing.x = GAP;
                 ui.add_space(((ui.available_width() - row_w) / 2.0).max(0.0));
                 for card in row {
-                    if draw_card(ui, card).clicked() {
+                    if draw_card(ui, card).clicked() && card.enabled {
                         picked = Some(card.pick);
                     }
                 }
@@ -138,20 +144,26 @@ impl ReclaimerApp {
 }
 
 fn draw_card(ui: &mut Ui, card: &Card) -> egui::Response {
-    let (rect, response) = ui.allocate_exact_size(CARD, Sense::click());
-    let response = response.on_hover_cursor(CursorIcon::PointingHand);
-    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, card.selected, &card.title));
+    let sense = if card.enabled { Sense::click() } else { Sense::hover() };
+    let (rect, response) = ui.allocate_exact_size(CARD, sense);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, card.enabled, card.selected, &card.title));
+    let response = if card.enabled {
+        response.on_hover_cursor(CursorIcon::PointingHand)
+    } else {
+        response.on_hover_text("This drive is encrypted by the hardware, so deleted files on it can\u{2019}t be read back.")
+    };
 
-    let fill = if response.hovered() && !card.selected { SURFACE } else { WHITE };
+    let fill = if response.hovered() && !card.selected && card.enabled { SURFACE } else { WHITE };
     ui.painter().rect_filled(rect, CornerRadius::same(RADIUS + 4), fill);
     let (stroke_color, stroke_w) = if card.selected { (BLACK, 2.0) } else { (LINE, 1.0) };
     ui.painter().rect_stroke(rect, CornerRadius::same(RADIUS + 4), egui::Stroke::new(stroke_w, stroke_color), egui::StrokeKind::Inside);
 
     let icon_rect = Rect::from_center_size(rect.center_top() + vec2(0.0, 52.0), vec2(44.0, 44.0));
-    icons::paint(ui.painter(), icon_rect, card.icon, BLACK);
+    let ink = if card.enabled { BLACK } else { GRAY_2 };
+    icons::paint(ui.painter(), icon_rect, card.icon, ink);
 
     let max_w = rect.width() - 24.0;
-    text_truncated(ui, rect.center_top() + vec2(0.0, 100.0), Align2::CENTER_TOP, &card.title, semibold(14.0), BLACK, max_w);
+    text_truncated(ui, rect.center_top() + vec2(0.0, 100.0), Align2::CENTER_TOP, &card.title, semibold(14.0), ink, max_w);
     text_truncated(ui, rect.center_top() + vec2(0.0, 121.0), Align2::CENTER_TOP, &card.detail, regular(12.0), GRAY_1, max_w);
     response
 }

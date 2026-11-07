@@ -4,7 +4,7 @@ A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk im
 
 > Work in progress — recovery works end-to-end on drives and disk images.
 
-![Reclaimer after a scan: recovered files listed with type and size, and a detail panel for the selected file](.github/assets/screenshot.png)
+![Reclaimer after a scan: recovered photos, a video, a document and other files in a grid, with the selected photo previewed in the inspector](.github/assets/screenshot.png)
 
 <sub>Scan of a demo disk image.</sub>
 
@@ -15,9 +15,11 @@ A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk im
 - Scan a physical drive — internal disks, USB sticks, SD cards — on macOS, Windows and Linux
 - Or load a `.img`, `.dd`, `.raw`, or any raw disk image via the file picker or drag-and-drop
 - Drives are only ever opened read-only; unreadable (bad) sectors are skipped instead of stopping the scan
+- Real file names: reads FAT12/16/32, exFAT and NTFS to recover deleted files with their name, original folder and date — fragmented files included
 - Fast scanning — reads in large aligned chunks (about 1 GB in under a second from cache)
-- Structure-aware carving — JPEG (JFIF and EXIF), PNG, GIF, MP4, MOV, HEIC, AVIF, PDF, ZIP, DOCX/XLSX/PPTX, SQLite
-- Each file reports whether it was recovered intact or only partially
+- Structure-aware carving finds what the filesystem forgot — JPEG (JFIF and EXIF), PNG, GIF, MP4, MOV, HEIC, AVIF, PDF, ZIP, DOCX/XLSX/PPTX, SQLite
+- Each file reports whether it was recovered intact or only partially (truncated, or its space since reused)
+- Shows only lost files: space that belongs to files you still have is skipped
 - A calm, black-on-white interface: choose a drive, press Scan, watch photos appear
 - Photo thumbnails, filters (Photos, Videos & Audio, Documents), search, and an inspector with Open / Show in Finder
 - Stop a scan at any time and keep what was found so far
@@ -26,7 +28,23 @@ A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk im
 
 ---
 
-## How File Carving Works
+## How Recovery Works
+
+A scan has two stages.
+
+**1. Ask the filesystem.** Deleting a file rarely erases its record; the filesystem just marks it unused. Reclaimer reads the partition table (MBR or GPT), then each volume's records:
+
+| File system | Where it's used | What a deleted file leaves behind |
+|-------------|-----------------|-----------------------------------|
+| FAT12 / 16 / 32 | SD cards, USB sticks, cameras | Name (first letter of the short name lost), size, date, first cluster |
+| exFAT | Large SD cards, USB drives | Full name, size, date, and whether the data was contiguous |
+| NTFS | Windows disks | Full name, folder, dates, and the exact map of every fragment |
+
+Files come back with their real names, saved into their original folders. One whose space has since been reused is marked Partial.
+
+**2. Carve.** Then every block is searched for files the filesystem has forgotten — on a reformatted card, or when a folder's own record was overwritten.
+
+### How carving works
 
 When a file is deleted, the OS marks its sectors as free but rarely overwrites them immediately. Reclaimer reads every sector looking for known **magic bytes** — the fixed byte sequences that start each file type.
 
@@ -52,11 +70,12 @@ After carving a file, the scan jumps past it rather than re-reading it.
 src/
 ├── main.rs              # eframe entry point, loads the Dock icon
 ├── source/
-│   ├── mod.rs           # BlockSource trait + FileSource — where bytes come from
-│   └── drives/          # list and open physical drives: macos.rs, windows.rs, linux.rs
-├── scanner/
-│   ├── mod.rs           # scan() finds files, export() saves one
+│   ├── mod.rs           # BlockSource trait, FileSource, Piece + save()
 │   ├── window.rs        # read-ahead buffer: few large aligned reads
+│   └── drives/          # list and open physical drives: macos.rs, windows.rs, linux.rs
+├── fs/                  # deleted files by name: partitions, fat, exfat, ntfs
+├── scanner/
+│   ├── mod.rs           # scan() carves by content
 │   └── formats/         # one carver per format; FORMATS table in mod.rs
 └── ui/
     ├── mod.rs           # app state, frame loop, actions
@@ -102,7 +121,21 @@ To open a disk image straight away: `cargo run -- path/to/disk.img`.
 
 UI screenshots: `RECLAIMER_SHOTS=/some/dir cargo test scan_an_image` drives the app and saves a PNG per step.
 
+Regenerate the README screenshot with `RECLAIMER_README_SHOT=.github/assets/screenshot.png cargo test readme_screenshot -- --ignored`.
+
 The app icon is drawn in code: `swift icons/make-icon.swift icons` (macOS) regenerates `icon.png`, `icon.icns` and `icon.ico`.
+
+---
+
+## Building the App
+
+| Platform | Command | Result |
+|----------|---------|--------|
+| macOS | `./packaging/macos/build-app.sh` | `target/release/Reclaimer.app` (about 11 MB) — drag it to Applications |
+| Windows | `cargo build --release` | `target\release\Reclaimer.exe`, icon embedded, no console window |
+| Linux | `./packaging/linux/install.sh` | Installs to `~/.local` with a menu entry and icon |
+
+The macOS app is signed ad hoc, not notarized: on another Mac, open it the first time with right-click → Open.
 
 ---
 
@@ -118,13 +151,14 @@ pub fn carve(w: &mut Window, start: u64, limit: u64)
 
 Then add one line to `FORMATS` in `src/scanner/formats/mod.rs`. Use the existing carvers as a guide, and add a `sample()` fixture with tests.
 
-Run the tests with `cargo test`. Among other things, they check that the two photos in `test.img` come back byte for byte (by size and checksum).
+Run the tests with `cargo test`. Filesystem tests use real images made by macOS in `testdata/` (rebuild with `testdata/make-fixtures.sh`), a FAT32 volume written by the `fatfs` crate, and a hand-built NTFS volume. Among other things, they check that the two photos in `test.img` come back byte for byte (by size and checksum).
 
 ---
 
 ## Roadmap
 
-- [ ] NTFS MFT parsing — read deleted file metadata (name, path, dates) from the Master File Table
+- [ ] Phones — iPhone backups and Recently Deleted; Android over USB
+- [ ] NTFS files whose records spill into extension records (very fragmented files)
 - [ ] Ask for administrator rights automatically on Windows and Linux (macOS already does)
 
 ---
@@ -145,10 +179,12 @@ The internal SSD in Apple silicon and T2 Macs is always hardware-encrypted, so r
 
 | File System | Status |
 |-------------|--------|
-| Raw image (any) | Working — carving only |
-| NTFS | Planned — MFT parsing |
-| FAT32 / exFAT | Future |
-| ext4 | Future |
+| FAT12 / FAT16 / FAT32 | Working — names, folders, dates |
+| exFAT | Working — full names, folders, dates, fragmented files |
+| NTFS | Working — full names, folders, dates, fragmented and tiny files |
+| Anything else (APFS, ext4, …) | Carving only |
+
+Partition tables: MBR (with logical partitions), GPT, or none (cards formatted whole).
 
 ---
 

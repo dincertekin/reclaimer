@@ -60,12 +60,18 @@ pub fn list() -> io::Result<Vec<Drive>> {
             .filter(|n| !n.is_empty())
             .unwrap_or_else(|| model.clone());
 
+        // Apple silicon and T2 Macs encrypt their internal SSD in hardware,
+        // always — even without FileVault.
+        let internal = boolean(&info, "Internal");
+        let encrypted = internal && (string(&info, "BusProtocol") == "Apple Fabric" || model.starts_with("APPLE SSD"));
+
         drives.push(Drive {
             path:         PathBuf::from(format!("/dev/r{id}")),
             name,
             model,
             size:         integer(&info, "TotalSize"),
-            removable:    !boolean(&info, "Internal"),
+            removable:    !internal,
+            encrypted,
             mount_points: mounted.iter().map(|(m, _)| PathBuf::from(m)).collect(),
         });
     }
@@ -192,6 +198,7 @@ mod tests {
         let drives = super::list().unwrap();
         let internal = drives.iter().find(|d| !d.removable).expect("no internal disk");
         assert!(internal.size > 0);
+        assert!(internal.encrypted, "this Mac's internal SSD should be detected as encrypted");
         assert!(internal.mount_points.iter().any(|m| m == std::path::Path::new("/")));
         eprintln!("{drives:#?}");
     }

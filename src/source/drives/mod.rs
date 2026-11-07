@@ -32,6 +32,9 @@ pub struct Drive {
     pub model:        String,
     pub size:         u64,
     pub removable:    bool,
+    /// Hardware-encrypted storage reads back as noise, so nothing can be
+    /// recovered from it.
+    pub encrypted:    bool,
     /// Where this drive's volumes are mounted.
     pub mount_points: Vec<PathBuf>,
 }
@@ -89,7 +92,7 @@ mod tests {
     fn drive(mounts: &[&str]) -> Drive {
         Drive {
             path: "/dev/test".into(), name: "Test".into(), model: String::new(),
-            size: 0, removable: true, mount_points: mounts.iter().map(PathBuf::from).collect(),
+            size: 0, removable: true, encrypted: false, mount_points: mounts.iter().map(PathBuf::from).collect(),
         }
     }
 

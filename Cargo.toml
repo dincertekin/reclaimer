@@ -3,10 +3,11 @@ name = "Reclaimer"
 version = "0.1.0"
 edition = "2024"
 
-[package.metadata.bundle]
-name = "Reclaimer"
-identifier = "com.dincertekin.reclaimer"
-icon = ["icons/icon.png"]
+[profile.release]
+# Small, fast binary: whole-program optimisation, no debug symbols.
+lto = "thin"
+codegen-units = 1
+strip = true
 
 [dependencies]
 eframe = { version = "0.34.3", features = ["persistence"] }
@@ -15,8 +16,10 @@ rfd   = "0.15"
 open  = "5"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 
+[target.'cfg(unix)'.dependencies]
+libc = "0.2"
+
 [target.'cfg(target_os = "macos")'.dependencies]
-libc  = "0.2"
 plist = "1"
 
 [target.'cfg(windows)'.dependencies]
@@ -25,7 +28,13 @@ windows-sys = { version = "0.61", features = [
     "Win32_Storage_FileSystem",
     "Win32_System_IO",
     "Win32_System_Ioctl",
+    "Win32_System_Time",
 ] }
+
+# Windows only: embeds the icon into Reclaimer.exe (see build.rs).
+[target.'cfg(windows)'.build-dependencies]
+winresource = "0.1"
 
 [dev-dependencies]
 egui_kittest = { version = "0.34.3", features = ["eframe", "wgpu", "snapshot"] }
+fatfs = "0.3"   # an independent FAT implementation, to build FAT32 test volumes

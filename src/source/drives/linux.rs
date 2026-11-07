@@ -54,6 +54,7 @@ pub fn list() -> io::Result<Vec<Drive>> {
             model,
             size,
             removable: read_number(&sys.join("removable")) == 1 || on_usb,
+            encrypted: false,
             mount_points,
         });
     }

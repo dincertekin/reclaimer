@@ -44,7 +44,7 @@ pub fn list() -> io::Result<Vec<Drive>> {
             .find_map(|m| volume_label(m))
             .unwrap_or_else(|| if model.is_empty() { format!("Disk {number}") } else { model.clone() });
 
-        drives.push(Drive { path, name, model, size, removable, mount_points });
+        drives.push(Drive { path, name, model, size, removable, encrypted: false, mount_points });
     }
     Ok(drives)
 }

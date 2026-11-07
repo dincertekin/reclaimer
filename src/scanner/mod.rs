@@ -6,18 +6,17 @@
 //! `export` writes a found file out.
 
 mod formats;
-mod window;
 
 pub use formats::Kind;
+#[cfg(test)]
+pub use formats::samples;
 
-use std::fs::File;
-use std::io::{self, BufWriter, Write};
+use std::io;
 use std::path::Path;
 use std::sync::atomic::{AtomicBool, Ordering};
 
-use crate::source::BlockSource;
+use crate::source::{BlockSource, Piece, Window};
 use formats::{FORMATS, HEADER_LEN};
-use window::Window;
 
 /// Progress is reported roughly every this many bytes.
 const PROGRESS_EVERY: u64 = 8 << 20;
@@ -87,21 +86,18 @@ pub fn scan(
     Ok(())
 }
 
+/// Do these first bytes look like a file with extension `ext`?
+/// `None` when we don't know the format.
+pub fn looks_like(ext: &str, header: &[u8]) -> Option<bool> {
+    FORMATS
+        .iter()
+        .find(|f| f.extensions.contains(&ext))
+        .map(|f| (f.matches)(header))
+}
+
 /// Copies a found file's bytes from the source into `path`.
 pub fn export(src: &mut dyn BlockSource, item: &Found, path: &Path) -> io::Result<()> {
-    let mut out = BufWriter::new(File::create(path)?);
-    let mut window = Window::new(src);
-    let end = item.offset + item.len;
-    let mut pos = item.offset;
-    while pos < end {
-        let chunk = window.bytes(pos, (end - pos).min(1 << 20) as usize)?;
-        if chunk.is_empty() {
-            return Err(io::ErrorKind::UnexpectedEof.into());
-        }
-        out.write_all(chunk)?;
-        pos += chunk.len() as u64;
-    }
-    out.flush()
+    crate::source::save(src, &[Piece::Disk { offset: item.offset, len: item.len }], path)
 }
 
 #[cfg(test)]

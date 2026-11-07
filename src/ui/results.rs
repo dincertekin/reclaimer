@@ -83,6 +83,9 @@ impl ReclaimerApp {
         let fraction = if total > 0 { done as f64 / total as f64 } else { 0.0 };
         let subtitle = if let Some(error) = &self.error {
             error.clone()
+        } else if scanning && done == 0 && !self.stage.is_empty() {
+            // Reading the filesystem: there is no percentage yet.
+            format!("{}  \u{00B7}  {} found", self.stage, fmt_count(n))
         } else if scanning {
             let mut parts = vec![format!("{} found", fmt_count(n)), format!("{:.0}%", fraction * 100.0)];
             let elapsed = self.started.elapsed().as_secs_f64();
@@ -279,21 +282,31 @@ impl ReclaimerApp {
         ui.label(egui::RichText::new(format!("{} \u{00B7} {}", file.kind, fmt_size(file.size))).font(regular(13.0)).color(GRAY_1));
         ui.add_space(16.0);
 
-        let rows = [
-            ("Kind", file.kind.to_string()),
-            ("Size", format!("{} bytes", fmt_count(file.size as usize))),
-            ("Status", if file.complete { "Intact".into() } else { "Partial".into() }),
-            ("Found at", format!("0x{:08X}", file.offset)),
-        ];
+        let mut rows = vec![("Kind", file.kind.clone())];
+        if let Some(folder) = &file.folder {
+            rows.push(("Was in", folder.clone()));
+        }
+        if let Some(modified) = file.modified {
+            rows.push(("Modified", fmt_date(modified)));
+        }
+        rows.push(("Size", format!("{} bytes", fmt_count(file.size as usize))));
+        rows.push(("Status", if file.complete { "Intact".into() } else { "Partial".into() }));
+        rows.push(("Found at", format!("0x{:08X}", file.offset)));
         for (label, value) in rows {
             let (row, _) = ui.allocate_exact_size(vec2(width, 28.0), Sense::hover());
             ui.painter().hline(row.x_range(), row.top(), Stroke::new(1.0, LINE));
-            ui.painter().text(row.left_center(), Align2::LEFT_CENTER, label, regular(13.0), GRAY_1);
-            ui.painter().text(row.right_center(), Align2::RIGHT_CENTER, value, regular(13.0), BLACK);
+            let label_rect = ui.painter().text(row.left_center(), Align2::LEFT_CENTER, label, regular(13.0), GRAY_1);
+            let room = width - label_rect.width() - 16.0;
+            text_truncated(ui, row.right_center(), Align2::RIGHT_CENTER, &value, regular(13.0), BLACK, room);
         }
         if !file.complete {
             ui.add_space(8.0);
-            ui.label(egui::RichText::new("Only part of this file was found. It may open with pieces missing.").font(regular(12.0)).color(GRAY_1));
+            let why = if file.folder.is_some() {
+                "Some of this file\u{2019}s space has been reused since it was deleted. It may open with pieces missing."
+            } else {
+                "Only part of this file was found. It may open with pieces missing."
+            };
+            ui.label(egui::RichText::new(why).font(regular(12.0)).color(GRAY_1));
         }
 
         ui.add_space(20.0);
@@ -328,7 +341,7 @@ fn chip(ui: &mut Ui, label: &str, count: usize, active: bool) -> egui::Response 
 fn file_glyph(ui: &Ui, rect: Rect, file: &FoundFile, scale: f32) {
     let side = rect.width() * scale;
     let icon_rect = Rect::from_center_size(rect.center() - vec2(0.0, side * 0.2), vec2(side, side));
-    icons::paint(ui.painter(), icon_rect, Icon::for_extension(file.extension), GRAY_1);
+    icons::paint(ui.painter(), icon_rect, Icon::for_extension(&file.extension), GRAY_1);
     ui.painter().text(
         icon_rect.center_bottom() + vec2(0.0, side * 0.25),
         Align2::CENTER_TOP,

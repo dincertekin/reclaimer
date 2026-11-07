@@ -3,9 +3,12 @@
 //! ever talks to this trait.
 
 pub mod drives;
+mod window;
+
+pub use window::Window;
 
 use std::fs::File;
-use std::io;
+use std::io::{self, BufWriter, Read, Write};
 use std::path::Path;
 
 pub trait BlockSource {
@@ -84,6 +87,40 @@ fn read_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
 #[cfg(windows)]
 fn read_at(file: &File, buf: &mut [u8], offset: u64) -> io::Result<usize> {
     std::os::windows::fs::FileExt::seek_read(file, buf, offset)
+}
+
+/// One stretch of a file being recovered. Files carved by content are one
+/// `Disk` piece; files found through a filesystem may be fragmented, sparse,
+/// or (tiny NTFS files) stored inline in the filesystem's own records.
+#[derive(Clone, Debug, PartialEq, Eq)]
+pub enum Piece {
+    Disk { offset: u64, len: u64 },
+    Zeros(u64),
+    Bytes(Vec<u8>),
+}
+
+/// Writes the pieces, in order, to a new file at `path`.
+pub fn save(src: &mut dyn BlockSource, pieces: &[Piece], path: &Path) -> io::Result<()> {
+    let mut out = BufWriter::new(File::create(path)?);
+    let mut window = Window::new(src);
+    for piece in pieces {
+        match piece {
+            Piece::Disk { offset, len } => {
+                let (mut pos, end) = (*offset, offset + len);
+                while pos < end {
+                    let chunk = window.bytes(pos, (end - pos).min(1 << 20) as usize)?;
+                    if chunk.is_empty() {
+                        return Err(io::ErrorKind::UnexpectedEof.into());
+                    }
+                    out.write_all(chunk)?;
+                    pos += chunk.len() as u64;
+                }
+            }
+            Piece::Zeros(len) => io::copy(&mut io::repeat(0).take(*len), &mut out).map(|_| ())?,
+            Piece::Bytes(bytes) => out.write_all(bytes)?,
+        }
+    }
+    out.flush()
 }
 
 /// In-memory source, so tests can build disk images on the fly.

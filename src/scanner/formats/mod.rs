@@ -8,7 +8,7 @@
 //! to `FORMATS`.
 
 use std::io;
-use super::window::Window;
+use crate::source::Window;
 
 mod gif;
 mod isobmff;
@@ -52,9 +52,11 @@ impl Carved {
 pub type CarveFn = fn(&mut Window, u64, u64) -> io::Result<Option<Carved>>;
 
 pub struct Format {
-    pub matches:  fn(&[u8]) -> bool,
-    pub carve:    CarveFn,
-    pub max_size: u64,
+    pub matches:    fn(&[u8]) -> bool,
+    pub carve:      CarveFn,
+    pub max_size:   u64,
+    /// File extensions whose contents start like this format.
+    pub extensions: &'static [&'static str],
 }
 
 /// How many bytes `matches` gets to look at.
@@ -64,13 +66,13 @@ const MB: u64 = 1 << 20;
 const GB: u64 = 1 << 30;
 
 pub const FORMATS: &[Format] = &[
-    Format { matches: jpeg::matches,    carve: jpeg::carve,    max_size: 64 * MB },
-    Format { matches: png::matches,     carve: png::carve,     max_size: 64 * MB },
-    Format { matches: gif::matches,     carve: gif::carve,     max_size: 32 * MB },
-    Format { matches: isobmff::matches, carve: isobmff::carve, max_size: 8 * GB },
-    Format { matches: pdf::matches,     carve: pdf::carve,     max_size: 256 * MB },
-    Format { matches: zip::matches,     carve: zip::carve,     max_size: GB },
-    Format { matches: sqlite::matches,  carve: sqlite::carve,  max_size: 4 * GB },
+    Format { matches: jpeg::matches,    carve: jpeg::carve,    max_size: 64 * MB,  extensions: &["jpg", "jpeg"] },
+    Format { matches: png::matches,     carve: png::carve,     max_size: 64 * MB,  extensions: &["png"] },
+    Format { matches: gif::matches,     carve: gif::carve,     max_size: 32 * MB,  extensions: &["gif"] },
+    Format { matches: isobmff::matches, carve: isobmff::carve, max_size: 8 * GB,   extensions: &["mp4", "mov", "m4v", "m4a", "heic", "heif", "avif", "3gp"] },
+    Format { matches: pdf::matches,     carve: pdf::carve,     max_size: 256 * MB, extensions: &["pdf"] },
+    Format { matches: zip::matches,     carve: zip::carve,     max_size: GB,       extensions: &["zip", "docx", "xlsx", "pptx", "odt", "epub"] },
+    Format { matches: sqlite::matches,  carve: sqlite::carve,  max_size: 4 * GB,   extensions: &["sqlite", "sqlite3", "db"] },
 ];
 
 fn be16(b: &[u8]) -> u16 { u16::from_be_bytes([b[0], b[1]]) }

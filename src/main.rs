@@ -1,4 +1,8 @@
+// Release builds on Windows are GUI apps: no console window behind them.
+#![cfg_attr(all(windows, not(debug_assertions)), windows_subsystem = "windows")]
+
 mod source;
+mod fs;
 mod scanner;
 mod ui;
 
@@ -13,7 +17,9 @@ fn main() -> eframe::Result<()> {
         .with_min_inner_size([760.0, 560.0])
         .with_fullsize_content_view(true)
         .with_titlebar_shown(false)
-        .with_title_shown(false);
+        .with_title_shown(false)
+        // Linux: matches reclaimer.desktop, so the taskbar shows our icon.
+        .with_app_id("reclaimer");
 
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);

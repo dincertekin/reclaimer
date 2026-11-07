@@ -18,11 +18,12 @@ pub enum Icon {
 impl Icon {
     /// The icon for a recovered file's extension.
     pub fn for_extension(ext: &str) -> Self {
-        match ext {
-            "jpg" | "png" | "gif" | "heic" | "avif" => Icon::Photo,
-            "mp4" | "mov" | "m4a" | "3gp" => Icon::Film,
-            "zip" => Icon::Archive,
-            "sqlite" => Icon::Database,
+        use super::types::Category;
+        match (ext, Category::from_ext(ext)) {
+            (_, Category::Photos) => Icon::Photo,
+            (_, Category::Media) => Icon::Film,
+            ("zip" | "rar" | "7z" | "tar" | "gz", _) => Icon::Archive,
+            ("sqlite" | "sqlite3" | "db", _) => Icon::Database,
             _ => Icon::Document,
         }
     }

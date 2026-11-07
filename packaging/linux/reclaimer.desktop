@@ -1,0 +1,10 @@
+[Desktop Entry]
+Type=Application
+Name=Reclaimer
+GenericName=File Recovery
+Comment=Recover deleted photos, videos and documents
+Exec=Reclaimer %f
+Icon=reclaimer
+Terminal=false
+Categories=Utility;System;
+StartupWMClass=reclaimer

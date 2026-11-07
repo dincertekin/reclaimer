@@ -5,7 +5,10 @@ use std::sync::{mpsc, Arc};
 use eframe::egui;
 use super::ReclaimerApp;
 use std::time::Instant;
-use super::types::{Category, FoundFile, Phase, ScanMsg, Source};
+use std::collections::HashSet;
+use std::io::Read;
+use super::types::{extension_of, kind_name, safe_name, Category, FoundFile, Phase, ScanMsg, Source};
+use crate::fs::{self, DeletedFile};
 use crate::scanner::{self, ScanEvent};
 use crate::source::{drives, BlockSource, FileSource};
 
@@ -26,6 +29,7 @@ impl ReclaimerApp {
         self.stopped = false;
         self.scan_folder = None;
         self.error = None;
+        self.stage = "";
 
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -94,6 +98,27 @@ fn run_scan(
     // The clock starts once permission is granted, so the estimate is honest.
     let _ = tx.send(ScanMsg::Progress { done: 0, total: reader.size() });
 
+    // 1. Ask the filesystem: deleted files with their names and folders.
+    let _ = tx.send(ScanMsg::Stage("Looking for deleted files\u{2026}"));
+    ctx.request_repaint();
+    let volumes = fs::analyze(&mut reader).unwrap_or_default();
+    let mut named_starts = HashSet::new();
+    for file in volumes.iter().flat_map(|v| &v.files) {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let found = save_named(&mut saver, file, &folder)
+            .map_err(|e| io::Error::new(e.kind(), format!("Could not save recovered file: {e}")))?;
+        named_starts.extend(file.start());
+        let _ = tx.send(ScanMsg::Found(found));
+        ctx.request_repaint();
+    }
+
+    // 2. Search every block for files the filesystem has forgotten —
+    // skipping ones already recovered by name, and space that belongs to
+    // files that still exist (those aren't lost).
+    let _ = tx.send(ScanMsg::Stage("Searching every block\u{2026}"));
+    let in_use = |offset: u64| volumes.iter().filter_map(|v| v.allocation.as_ref()).any(|a| a.contains(offset));
     let mut found = 0u32;
     let mut save_error = None;
 
@@ -102,6 +127,7 @@ fn run_scan(
             let _ = tx.send(ScanMsg::Progress { done, total });
             ctx.request_repaint();
         }
+        ScanEvent::Found(item) if named_starts.contains(&item.offset) || in_use(item.offset) => {}
         ScanEvent::Found(item) => {
             let filename = format!("recovered_{}.{}", found + 1, item.kind.ext);
             let path = folder.join(&filename);
@@ -109,14 +135,16 @@ fn run_scan(
                 Ok(()) => {
                     found += 1;
                     let _ = tx.send(ScanMsg::Found(FoundFile {
-                        kind:      item.kind.name,
-                        extension: item.kind.ext,
+                        kind:      item.kind.name.to_string(),
+                        extension: item.kind.ext.to_string(),
                         offset:    item.offset,
                         size:      item.len,
                         filename,
                         path,
                         category:  Category::from_ext(item.kind.ext),
                         complete:  item.complete,
+                        folder:    None,
+                        modified:  None,
                     }));
                     ctx.request_repaint();
                 }
@@ -134,6 +162,50 @@ fn run_scan(
         Some(e) => Err(io::Error::new(e.kind(), format!("Could not save recovered file: {e}"))),
         None    => Ok(()),
     }
+}
+
+/// Saves a file the filesystem told us about, recreating its folder inside
+/// the scan folder: `<scan>/DCIM/IMG_0001.JPG`.
+fn save_named(src: &mut FileSource, file: &DeletedFile, scan_folder: &Path) -> io::Result<FoundFile> {
+    let dir = file
+        .folder
+        .split('/')
+        .filter(|part| !part.is_empty())
+        .fold(scan_folder.to_path_buf(), |dir, part| dir.join(safe_name(part)));
+    std::fs::create_dir_all(&dir)?;
+    let path = unique_file(&dir, &safe_name(&file.name));
+    crate::source::save(src, &file.pieces, &path)?;
+
+    // A "photo.jpg" that no longer starts like a JPEG was overwritten.
+    let extension = extension_of(&file.name);
+    let mut header = [0u8; 32];
+    let n = std::fs::File::open(&path)?.read(&mut header)?;
+    let looks_right = scanner::looks_like(&extension, &header[..n]) != Some(false);
+
+    Ok(FoundFile {
+        kind:     kind_name(&extension),
+        category: Category::from_ext(&extension),
+        offset:   file.start().unwrap_or(0),
+        size:     file.size,
+        filename: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+        path,
+        complete: file.intact && looks_right,
+        folder:   Some(file.folder.clone()),
+        modified: file.modified.map(|m| m.local()),
+        extension,
+    })
+}
+
+/// `dir/name.ext`, or `dir/name 2.ext`, ... if that is taken.
+fn unique_file(dir: &Path, name: &str) -> PathBuf {
+    let (stem, ext) = match name.rsplit_once('.') {
+        Some((stem, ext)) if !stem.is_empty() => (stem, format!(".{ext}")),
+        _ => (name, String::new()),
+    };
+    (1..)
+        .map(|n| if n == 1 { dir.join(name) } else { dir.join(format!("{stem} {n}{ext}")) })
+        .find(|p| !p.exists())
+        .expect("unbounded range always yields a free name")
 }
 
 /// `base/name`, or `base/name 2`, `base/name 3`, ... — the way Finder names
