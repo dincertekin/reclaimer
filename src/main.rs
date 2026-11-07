@@ -3,12 +3,23 @@
 
 mod source;
 mod fs;
+mod media;
 mod phone;
 mod scanner;
 mod sqlite;
 mod ui;
 
 fn main() -> eframe::Result<()> {
+    // `Reclaimer --diagnose`: print what Reclaimer can see, for bug reports.
+    if std::env::args().nth(1).as_deref() == Some("--diagnose") {
+        println!("{}", phone::diagnose());
+        match source::drives::list() {
+            Ok(drives) => drives.iter().for_each(|d| println!("Drive: {} ({}, {} bytes)", d.name, d.path.display(), d.size)),
+            Err(e) => println!("Drives: listing failed ({e})"),
+        }
+        return Ok(());
+    }
+
     let icon = load_icon();
 
     // On macOS the title bar is transparent, so the window is one white

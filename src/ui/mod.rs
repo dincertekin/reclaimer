@@ -8,7 +8,7 @@ use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc};
 use std::time::{Duration, Instant};
 
-use eframe::egui::{self, Color32, Sense};
+use eframe::egui::{self, Color32};
 
 mod choose;
 mod icons;
@@ -21,11 +21,14 @@ mod types;
 mod tests;
 
 use crate::phone::iphone::{self, Backup};
+use crate::phone::{self as phones, Phone};
 use crate::source::drives::{self, Drive};
 
-/// What the background listing found: drives, and iPhone backups.
+/// What the background listing found: drives, phones on a cable, and
+/// iPhone backups.
 struct Listing {
     drives:  io::Result<Vec<Drive>>,
+    phones:  Vec<Phone>,
     backups: io::Result<Vec<Backup>>,
 }
 use thumbs::Thumbnails;
@@ -40,6 +43,7 @@ pub struct ReclaimerApp {
     // Choosing
     source:        Option<Source>,
     drives:        Vec<Drive>,
+    phones:        Vec<Phone>,
     backups:       Vec<Backup>,
     /// macOS hides iPhone backups until the app has Full Disk Access.
     backups_locked: bool,
@@ -80,6 +84,7 @@ impl ReclaimerApp {
         Self {
             source:        image.map(Source::Image),
             drives:        Vec::new(),
+            phones:        Vec::new(),
             backups:       Vec::new(),
             backups_locked: false,
             drives_rx:     None,
@@ -143,7 +148,7 @@ impl ReclaimerApp {
         let ctx = ctx.clone();
         std::thread::spawn(move || {
             let backups = iphone::find_backups(&iphone::backup_folders());
-            let _ = tx.send(Listing { drives: drives::list(), backups });
+            let _ = tx.send(Listing { drives: drives::list(), phones: phones::connected(), backups });
             ctx.request_repaint();
         });
     }
@@ -245,6 +250,20 @@ impl ReclaimerApp {
                 }
                 self.drives = list;
             }
+            // Same for a phone that was unplugged.
+            if let Some(Source::Phone(chosen)) = &self.source {
+                let current = listing.phones.iter().find(|p| p.id == chosen.id).cloned();
+                self.source = current.map(Source::Phone);
+            }
+            // A phone that shows up is almost certainly what the user came
+            // for: choose it if nothing else is chosen.
+            let new_phone = listing.phones.iter().find(|p| !self.phones.iter().any(|old| old.id == p.id)).cloned();
+            if self.source.is_none()
+                && let Some(phone) = new_phone
+            {
+                self.source = Some(Source::Phone(phone));
+            }
+            self.phones = listing.phones;
             match listing.backups {
                 Ok(list) => {
                     self.backups = list;
@@ -305,17 +324,9 @@ impl eframe::App for ReclaimerApp {
 
         let window = ctx.content_rect();
 
-        // The transparent title bar strip still moves the window. Start the
-        // drag on mouse-down: macOS needs the press itself, and starting
-        // later (once egui sees movement) logs "Window move completed
-        // without beginning".
-        if theme::TITLEBAR > 0.0 {
-            let strip = egui::Rect::from_min_size(window.min, egui::vec2(window.width(), theme::TITLEBAR));
-            let response = ui.interact(strip, egui::Id::new("titlebar"), Sense::click_and_drag());
-            if response.hovered() && ctx.input(|i| i.pointer.primary_pressed()) {
-                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
-            }
-        }
+        // No drag handling here: macOS's own (transparent) title bar already
+        // moves the window. Asking it to drag as well made the two race and
+        // log "Window move completed without beginning".
 
         if self.phase == Phase::Choose && ctx.input(|i| !i.raw.hovered_files.is_empty()) {
             let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop")));

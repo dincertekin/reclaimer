@@ -1,6 +1,8 @@
 use std::path::{Path, PathBuf};
+pub use crate::media::Category;
 use crate::fs::Timestamp;
 use crate::phone::iphone::Backup;
+use crate::phone::Phone;
 use crate::source::drives::Drive;
 
 /// A file recovered and saved during a scan.
@@ -41,45 +43,14 @@ impl Filter {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
-pub enum Category {
-    Photos,
-    Media,
-    Documents,
-    Other,
-}
-
-impl Category {
-    pub const ALL: [Category; 4] = [Category::Photos, Category::Media, Category::Documents, Category::Other];
-
-    pub fn from_ext(ext: &str) -> Self {
-        match ext {
-            "jpg" | "jpeg" | "png" | "gif" | "heic" | "heif" | "avif" | "webp" | "bmp" | "tif" | "tiff"
-            | "dng" | "cr2" | "cr3" | "nef" | "arw" | "raf" | "orf" | "rw2" => Category::Photos,
-            "mp4" | "mov" | "m4v" | "avi" | "mkv" | "wmv" | "3gp" | "mts" | "m2ts"
-            | "m4a" | "mp3" | "wav" | "aac" | "flac" | "ogg" | "wma" => Category::Media,
-            "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "odt" | "ods" | "odp" | "rtf"
-            | "txt" | "md" | "csv" | "pages" | "numbers" | "key" | "epub" => Category::Documents,
-            _ => Category::Other,
-        }
-    }
-
-    pub fn label(self) -> &'static str {
-        match self {
-            Category::Photos    => "Photos",
-            Category::Media     => "Videos & Audio",
-            Category::Documents => "Documents",
-            Category::Other     => "Other",
-        }
-    }
-}
-
-/// What we scan: an image file, a whole drive, or an iPhone backup.
+/// What we scan: an image file, a whole drive, an iPhone backup, or a
+/// phone on a cable.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Source {
     Image(PathBuf),
     Drive(Drive),
     Backup(Backup),
+    Phone(Phone),
 }
 
 impl Source {
@@ -88,6 +59,7 @@ impl Source {
             Source::Image(path) => path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
             Source::Drive(drive) => drive.name.clone(),
             Source::Backup(backup) => backup.device.clone(),
+            Source::Phone(phone) => phone.name.clone(),
         }
     }
 }

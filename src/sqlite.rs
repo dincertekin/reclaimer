@@ -6,6 +6,7 @@
 //! of pages whose leaves hold rows, and a row too big for its page continues
 //! on a chain of overflow pages. Format: https://www.sqlite.org/fileformat.html
 
+use std::collections::HashMap;
 use std::io;
 
 #[derive(Clone, Debug, PartialEq)]
@@ -47,6 +48,8 @@ pub struct Database {
     bytes:     Vec<u8>,
     page_size: usize,
     usable:    usize, // page size minus space reserved at the end of each page
+    /// Newer versions of pages, from the write-ahead log.
+    overlay:   HashMap<u32, Vec<u8>>,
 }
 
 const MAX_DEPTH: usize = 64;
@@ -57,6 +60,20 @@ fn bad(what: &str) -> io::Error {
 
 impl Database {
     pub fn open(bytes: Vec<u8>) -> io::Result<Self> {
+        Self::open_with_wal(bytes, None)
+    }
+
+    /// Opens a database together with its write-ahead log (`name-wal`),
+    /// if it has one. A live database keeps its newest changes there.
+    pub fn open_with_wal(bytes: Vec<u8>, wal: Option<&[u8]>) -> io::Result<Self> {
+        let mut db = Self::open_main(bytes)?;
+        if let Some(wal) = wal {
+            db.apply_wal(wal);
+        }
+        Ok(db)
+    }
+
+    fn open_main(bytes: Vec<u8>) -> io::Result<Self> {
         if bytes.len() < 100 || !bytes.starts_with(b"SQLite format 3\0") {
             return Err(bad("not an SQLite file"));
         }
@@ -68,7 +85,48 @@ impl Database {
             return Err(bad("page size"));
         }
         let usable = page_size - bytes[20] as usize;
-        Ok(Self { bytes, page_size, usable })
+        Ok(Self { bytes, page_size, usable, overlay: HashMap::new() })
+    }
+
+    /// The log is a header and a series of frames, each a page number plus
+    /// that page's new contents. Frames count once a commit frame (one that
+    /// records the new database size) closes their transaction. Salts and a
+    /// running checksum tell current frames from leftovers of older logs.
+    fn apply_wal(&mut self, wal: &[u8]) {
+        let be = |b: &[u8]| u32::from_be_bytes(b[..4].try_into().unwrap());
+        if wal.len() < 32 {
+            return;
+        }
+        let big_endian = match be(&wal[0..]) {
+            0x377F_0683 => true,
+            0x377F_0682 => false,
+            _ => return,
+        };
+        if be(&wal[8..]) as usize != self.page_size {
+            return;
+        }
+        let salt = &wal[16..24];
+        let (mut s0, mut s1) = wal_checksum(&wal[..24], big_endian, (0, 0));
+        if (s0, s1) != (be(&wal[24..]), be(&wal[28..])) {
+            return;
+        }
+        let mut pending = Vec::new();
+        let mut pos = 32;
+        while pos + 24 + self.page_size <= wal.len() {
+            let (header, page) = (&wal[pos..pos + 24], &wal[pos + 24..pos + 24 + self.page_size]);
+            if &header[8..16] != salt {
+                break;
+            }
+            (s0, s1) = wal_checksum(page, big_endian, wal_checksum(&header[..8], big_endian, (s0, s1)));
+            if (s0, s1) != (be(&header[16..]), be(&header[20..])) {
+                break; // torn write: stop at the last good frame
+            }
+            pending.push((be(&header[0..]), page.to_vec()));
+            if be(&header[4..]) != 0 {
+                self.overlay.extend(pending.drain(..)); // a commit
+            }
+            pos += 24 + self.page_size;
+        }
     }
 
     /// Every row of the named table. Older rows written before an
@@ -100,6 +158,9 @@ impl Database {
     }
 
     fn page(&self, number: u32) -> io::Result<&[u8]> {
+        if let Some(page) = self.overlay.get(&number) {
+            return Ok(page);
+        }
         let start = (number as usize).checked_sub(1).ok_or_else(|| bad("page 0"))? * self.page_size;
         self.bytes.get(start..start + self.page_size).ok_or_else(|| bad("page past end of file"))
     }
@@ -166,6 +227,19 @@ impl Database {
         }
         Ok(out)
     }
+}
+
+/// The WAL's running checksum over 8-byte steps.
+fn wal_checksum(bytes: &[u8], big_endian: bool, (mut s0, mut s1): (u32, u32)) -> (u32, u32) {
+    for step in bytes.chunks_exact(8) {
+        let word = |b: &[u8]| {
+            let b: [u8; 4] = b.try_into().unwrap();
+            if big_endian { u32::from_be_bytes(b) } else { u32::from_le_bytes(b) }
+        };
+        s0 = s0.wrapping_add(word(&step[..4])).wrapping_add(s1);
+        s1 = s1.wrapping_add(word(&step[4..])).wrapping_add(s0);
+    }
+    (s0, s1)
 }
 
 /// SQLite's variable-length integer: up to 9 bytes, 7 bits each (8 in the last).
@@ -303,6 +377,28 @@ mod tests {
         assert_eq!(column_names(sql), ["fileID", "domain", "flags", "file"]);
         assert_eq!(rowid_alias("CREATE TABLE t (z_pk INTEGER PRIMARY KEY, a)"), Some(0));
         assert_eq!(rowid_alias(sql), None);
+    }
+
+    #[test]
+    fn reads_changes_still_in_the_write_ahead_log() {
+        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/testdata");
+        let main = std::fs::read(format!("{dir}/sqlite-wal.db")).unwrap();
+        let wal = std::fs::read(format!("{dir}/sqlite-wal.db-wal")).unwrap();
+        let state = |t: &Table| t.rows.iter().map(|r| r[1].as_int().unwrap()).collect::<Vec<_>>();
+
+        let without = Database::open(main.clone()).unwrap().table("ZASSET").unwrap();
+        assert_eq!(state(&without), [0, 0]);
+
+        let with = Database::open_with_wal(main.clone(), Some(&wal)).unwrap().table("ZASSET").unwrap();
+        assert_eq!(state(&with), [0, 1, 0], "row 2 trashed and row 3 added in the log");
+
+        // A log whose last frame was torn keeps only what was committed before it.
+        let mut torn = wal.clone();
+        let last = torn.len() - 1;
+        torn[last] ^= 0xFF;
+        // Both changes were one transaction, so a torn commit frame drops both.
+        let partial = Database::open_with_wal(main, Some(&torn)).unwrap().table("ZASSET").unwrap();
+        assert_eq!(state(&partial), [0, 0]);
     }
 
     #[test]

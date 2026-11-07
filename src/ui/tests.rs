@@ -188,3 +188,45 @@ fn encrypted_backup_explains_itself() {
     assert!(app.error.as_deref().unwrap().contains("encrypted"));
 }
 
+
+#[test]
+fn phone_files_land_in_their_folders() {
+    use super::scan::ToFolder;
+    use super::types::ScanMsg;
+    use crate::phone::{PhoneFile, Sink};
+    use std::sync::atomic::AtomicBool;
+
+    let folder = std::env::temp_dir().join(format!("reclaimer-phone-{}", std::process::id()));
+    let (tx, rx) = std::sync::mpsc::channel();
+    let ctx = eframe::egui::Context::default();
+    let cancel = AtomicBool::new(false);
+    let mut sink = ToFolder { folder: folder.clone(), tx: &tx, ctx: &ctx, cancel: &cancel, total: 1, done: 0 };
+
+    let photo = read_photo();
+    let files = [
+        PhoneFile { name: "IMG_0001.JPG".into(), folder: "/Camera Roll/100APPLE".into(), size: photo.len() as u64, modified: None, recently_deleted: false },
+        PhoneFile { name: "IMG_0001.JPG".into(), folder: "/Camera Roll/100APPLE".into(), size: photo.len() as u64, modified: None, recently_deleted: true },
+        PhoneFile { name: "a:b.pdf".into(), folder: "/Internal shared storage/Download".into(), size: 3, modified: None, recently_deleted: false },
+    ];
+    sink.listed(files.iter().map(|f| f.size).sum());
+    for (file, bytes) in files.iter().zip([photo.clone(), photo.clone(), b"%PD".to_vec()]) {
+        let path = sink.destination(file).unwrap();
+        std::fs::write(&path, bytes).unwrap();
+        assert!(sink.saved(file, path));
+    }
+
+    let found: Vec<_> = rx.try_iter().filter_map(|m| match m { ScanMsg::Found(f) => Some(f), _ => None }).collect();
+    let summary: Vec<_> = found.iter().map(|f| (f.path.strip_prefix(&folder).unwrap().to_path_buf(), f.recently_deleted, f.complete)).collect();
+    assert_eq!(summary, [
+        (PathBuf::from("Camera Roll/100APPLE/IMG_0001.JPG"), false, true),
+        (PathBuf::from("Camera Roll/100APPLE/IMG_0001 2.JPG"), true, true), // same name: kept apart
+        (PathBuf::from("Internal shared storage/Download/a_b.pdf"), false, false), // unsafe name cleaned; not a real PDF
+    ]);
+    std::fs::remove_dir_all(folder).unwrap();
+}
+
+fn read_photo() -> Vec<u8> {
+    let image = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/test.img")).unwrap();
+    image[1024..1024 + 94_978].to_vec()
+}
+

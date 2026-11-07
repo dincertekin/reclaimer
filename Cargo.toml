@@ -3,6 +3,14 @@ name = "Reclaimer"
 version = "0.1.0"
 edition = "2024"
 
+[features]
+default = ["tls-ring"]
+# TLS for talking to iPhones. `ring` is the real one; the pure-Rust backend
+# exists so Windows/Linux builds can be type-checked from a Mac without a C
+# cross-compiler:  cargo clippy --target x86_64-pc-windows-msvc --no-default-features --features tls-rustcrypto
+tls-ring       = ["idevice/ring"]
+tls-rustcrypto = ["idevice/rustcrypto"]
+
 [profile.release]
 # Small, fast binary: whole-program optimisation, no debug symbols.
 lto = "thin"
@@ -16,12 +24,20 @@ rfd   = "0.15"
 open  = "5"
 image = { version = "0.25", default-features = false, features = ["png", "jpeg", "gif"] }
 plist = "1"   # iPhone backups (all platforms); diskutil output (macOS)
+# Phones over USB. Both libraries are async; a small Tokio runtime drives them.
+idevice = { version = "0.1.68", default-features = false, features = ["usbmuxd", "afc", "pair"] }
+mtp-rs  = "0.38"
+tokio   = { version = "1", features = ["rt", "time"] }
+chrono  = { version = "0.4", default-features = false }
 
 [target.'cfg(unix)'.dependencies]
 libc = "0.2"
 
 
 [target.'cfg(windows)'.dependencies]
+# HEIC/RAW thumbnails through Windows' own imaging library (WIC). Same version
+# mtp-rs uses, so nothing extra is built.
+windows = { version = "=0.62.2", features = ["Win32_Foundation", "Win32_Graphics_Imaging", "Win32_System_Com"] }
 windows-sys = { version = "0.61", features = [
     "Win32_Foundation",
     "Win32_Storage_FileSystem",

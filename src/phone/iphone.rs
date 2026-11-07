@@ -110,13 +110,16 @@ pub fn files(backup: &Backup) -> io::Result<Vec<BackupFile>> {
     let stored = |file_id: &str| backup.path.join(file_id.get(..2).unwrap_or("")).join(file_id);
 
     // Which Camera Roll files are in Recently Deleted.
-    let trashed = manifest
-        .rows
-        .iter()
-        .find(|r| r[domain].as_text() == Some("CameraRollDomain") && r[path].as_text() == Some(PHOTOS_LIBRARY))
-        .and_then(|r| r[id].as_text())
-        .map(|file_id| recently_deleted(&stored(file_id)))
-        .unwrap_or_default();
+    let stored_copy = |wanted: &str| {
+        manifest
+            .rows
+            .iter()
+            .find(|r| r[domain].as_text() == Some("CameraRollDomain") && r[path].as_text() == Some(wanted))
+            .and_then(|r| r[id].as_text())
+            .and_then(|file_id| std::fs::read(stored(file_id)).ok())
+    };
+    let wal = stored_copy(&format!("{PHOTOS_LIBRARY}-wal"));
+    let trashed = stored_copy(PHOTOS_LIBRARY).map(|db| recently_deleted_in(db, wal.as_deref())).unwrap_or_default();
 
     let mut files = Vec::new();
     for row in &manifest.rows {
@@ -164,11 +167,11 @@ fn file_metadata(blob: &[u8]) -> (Option<u64>, Option<Modified>) {
     (number("Size"), number("LastModified").map(|t| Modified::Utc(t as i64)))
 }
 
-/// Paths ("DCIM/100APPLE/IMG_0002.JPG") of photos in Recently Deleted.
-fn recently_deleted(photos_library: &Path) -> HashSet<String> {
-    let table = std::fs::read(photos_library)
+/// Paths ("DCIM/100APPLE/IMG_0002.JPG") of photos in Recently Deleted,
+/// from the Photos library database and its write-ahead log.
+pub(crate) fn recently_deleted_in(photos_library: Vec<u8>, wal: Option<&[u8]>) -> HashSet<String> {
+    let table = Database::open_with_wal(photos_library, wal)
         .ok()
-        .and_then(|bytes| Database::open(bytes).ok())
         // The table was called ZGENERICASSET before iOS 14.
         .and_then(|db| db.table("ZASSET").or_else(|_| db.table("ZGENERICASSET")).ok());
     let Some(table) = table else { return HashSet::new() };

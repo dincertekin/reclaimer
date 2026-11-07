@@ -6,6 +6,7 @@ use eframe::egui::{self, vec2, Align2, CornerRadius, CursorIcon, Frame, Rect, Se
 use super::icons::{self, Icon};
 use super::theme::*;
 use super::types::*;
+use crate::phone::{PhoneKind, PhoneStatus};
 use super::ReclaimerApp;
 
 const CARD: egui::Vec2 = vec2(176.0, 156.0);
@@ -25,6 +26,7 @@ struct Card {
 #[derive(Clone, Copy)]
 enum Pick {
     Drive(usize),
+    Phone(usize),
     Backup(usize),
     AllowBackups,
     Image,
@@ -59,6 +61,20 @@ impl ReclaimerApp {
             note:     drive.encrypted.then_some("This drive is encrypted by the hardware, so deleted files on it can\u{2019}t be read back."),
             pick:     Pick::Drive(i),
         }).collect();
+
+        cards.extend(self.phones.iter().enumerate().map(|(i, phone)| Card {
+            icon:     Icon::Phone,
+            title:    phone.name.clone(),
+            detail:   match (phone.kind, phone.status) {
+                (PhoneKind::IPhone, PhoneStatus::NeedsTrust) => "iPhone \u{00B7} Tap Trust when asked".into(),
+                (PhoneKind::IPhone, _) => "iPhone \u{00B7} Connected".into(),
+                (PhoneKind::Android, _) => "Android \u{00B7} Connected".into(),
+            },
+            selected: matches!(&self.source, Some(Source::Phone(p)) if p.id == phone.id),
+            enabled:  true,
+            note:     None,
+            pick:     Pick::Phone(i),
+        }));
 
         cards.extend(self.backups.iter().enumerate().map(|(i, backup)| Card {
             icon:     Icon::Phone,
@@ -130,7 +146,15 @@ impl ReclaimerApp {
             });
             ui.add_space(GAP);
         }
-        ui.add_space(44.0 - GAP);
+        if self.phones.is_empty() {
+            ui.vertical_centered(|ui| {
+                let hint = "Recovering from a phone? Connect it with a cable, unlock it, then tap Trust (iPhone) or choose File Transfer (Android).";
+                ui.label(egui::RichText::new(hint).font(regular(13.0)).color(GRAY_1));
+            });
+            ui.add_space(44.0 - GAP - 18.0);
+        } else {
+            ui.add_space(44.0 - GAP);
+        }
 
         ui.vertical_centered(|ui| {
             if primary_button(ui, "Scan", vec2(200.0, 44.0), self.source.is_some()).clicked() {
@@ -153,6 +177,11 @@ impl ReclaimerApp {
             Some(Pick::Drive(i)) => {
                 if let Some(drive) = self.drives.get(i).cloned() {
                     self.set_source(Source::Drive(drive));
+                }
+            }
+            Some(Pick::Phone(i)) => {
+                if let Some(phone) = self.phones.get(i).cloned() {
+                    self.set_source(Source::Phone(phone));
                 }
             }
             Some(Pick::Backup(i)) => {

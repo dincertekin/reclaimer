@@ -10,6 +10,7 @@ use std::io::Read;
 use super::types::{extension_of, kind_name, safe_name, Category, Filter, FoundFile, Phase, ScanMsg, Source};
 use crate::fs::{self, DeletedFile};
 use crate::phone::iphone::{self, Backup};
+use crate::phone::{self, Phone, PhoneFile};
 use crate::scanner::{self, ScanEvent};
 use crate::source::{drives, BlockSource, FileSource};
 
@@ -89,6 +90,7 @@ fn run_scan(
         Source::Image(path)   => FileSource::image(path)?,
         Source::Drive(drive)  => drives::open(drive)?,
         Source::Backup(backup) => return scan_backup(backup, output_dir, cancel, tx, ctx),
+        Source::Phone(device)  => return scan_phone(device, output_dir, cancel, tx, ctx),
     };
     // A second handle for saving, as the scan holds the first. Cloning
     // (rather than reopening) means one permission prompt, not two.
@@ -245,6 +247,69 @@ fn scan_backup(
         ctx.request_repaint();
     }
     Ok(())
+}
+
+/// Copies a phone's files over the cable.
+fn scan_phone(
+    device:     &Phone,
+    output_dir: &Path,
+    cancel:     &AtomicBool,
+    tx:         &mpsc::Sender<ScanMsg>,
+    ctx:        &egui::Context,
+) -> io::Result<()> {
+    let folder = unique_folder(output_dir, &device.name);
+    std::fs::create_dir_all(&folder)?;
+    let _ = tx.send(ScanMsg::Started { folder: folder.clone() });
+    let mut sink = ToFolder { folder, tx, ctx, cancel, total: 1, done: 0 };
+    phone::recover(device, &mut sink)
+}
+
+/// Saves phone files under the scan folder, mirroring where they lived.
+pub(super) struct ToFolder<'a> {
+    pub(super) folder: PathBuf,
+    pub(super) tx:     &'a mpsc::Sender<ScanMsg>,
+    pub(super) ctx:    &'a egui::Context,
+    pub(super) cancel: &'a AtomicBool,
+    pub(super) total:  u64,
+    pub(super) done:   u64,
+}
+
+impl phone::Sink for ToFolder<'_> {
+    fn stage(&mut self, text: &'static str) {
+        let _ = self.tx.send(ScanMsg::Stage(text));
+        self.ctx.request_repaint();
+    }
+
+    fn listed(&mut self, bytes: u64) {
+        self.total = bytes.max(1);
+    }
+
+    fn destination(&mut self, file: &PhoneFile) -> io::Result<PathBuf> {
+        let dir = file.folder.split('/').filter(|p| !p.is_empty()).fold(self.folder.clone(), |d, p| d.join(safe_name(p)));
+        std::fs::create_dir_all(&dir)?;
+        Ok(unique_file(&dir, &safe_name(&file.name)))
+    }
+
+    fn saved(&mut self, file: &PhoneFile, path: PathBuf) -> bool {
+        let extension = extension_of(&file.name);
+        let _ = self.tx.send(ScanMsg::Found(FoundFile {
+            kind:      kind_name(&extension),
+            category:  Category::from_ext(&extension),
+            offset:    None,
+            size:      file.size,
+            filename:  path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            complete:  content_matches_name(&path, &extension).unwrap_or(true),
+            path,
+            folder:    Some(file.folder.clone()),
+            modified:  file.modified.map(|m| m.local()),
+            recently_deleted: file.recently_deleted,
+            extension,
+        }));
+        self.done += file.size;
+        let _ = self.tx.send(ScanMsg::Progress { done: self.done, total: self.total });
+        self.ctx.request_repaint();
+        !self.cancel.load(Ordering::Relaxed)
+    }
 }
 
 /// A "photo.jpg" that no longer starts like a JPEG was overwritten.

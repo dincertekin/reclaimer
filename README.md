@@ -15,6 +15,7 @@ A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk im
 - Scan a physical drive — internal disks, USB sticks, SD cards — on macOS, Windows and Linux
 - Or load a `.img`, `.dd`, `.raw`, or any raw disk image via the file picker or drag-and-drop
 - Drives are only ever opened read-only; unreadable (bad) sectors are skipped instead of stopping the scan
+- Phones on a USB cable: an iPhone's whole camera roll (Recently Deleted included), or an Android phone's photos, videos and documents (gallery trash included)
 - iPhone backups (Finder / iTunes): recovers the Camera Roll — including photos in Recently Deleted — plus Messages attachments and WhatsApp media
 - Real file names: reads FAT12/16/32, exFAT and NTFS to recover deleted files with their name, original folder and date — fragmented files included
 - Fast scanning — reads in large aligned chunks (about 1 GB in under a second from cache)
@@ -75,7 +76,8 @@ src/
 │   ├── window.rs        # read-ahead buffer: few large aligned reads
 │   └── drives/          # list and open physical drives: macos.rs, windows.rs, linux.rs
 ├── fs/                  # deleted files by name: partitions, fat, exfat, ntfs
-├── phone/               # iPhone backups (iphone.rs)
+├── media.rs             # file categories by extension
+├── phone/               # iphone_usb.rs, android.rs (cable), iphone.rs (backups)
 ├── sqlite.rs            # small read-only SQLite reader (phones keep their indexes in SQLite)
 ├── scanner/
 │   ├── mod.rs           # scan() carves by content
@@ -101,9 +103,12 @@ src/
 | `eframe 0.34` + `egui 0.34` | GUI — immediate-mode, pure Rust, no web tech |
 | `rfd 0.15` | Native OS file picker (NSOpenPanel on macOS) |
 | `open 5` | Opens recovered files with the OS default app |
-| `image 0.25` | App icon and photo thumbnails (PNG, JPEG, GIF) |
+| `image 0.25` | App icon and photo thumbnails (PNG, JPEG, GIF); HEIC, AVIF and RAW thumbnails come from the system (`sips` on macOS, WIC on Windows, `heif-convert` on Linux) |
 | Inter (bundled) | Typeface — [SIL Open Font License](assets/fonts/Inter-LICENSE.txt) |
-| `plist`, `libc` (macOS) | Read `diskutil` output; disk ioctls and `authopen` |
+| `plist`, `libc` | iPhone backups, `diskutil` output; disk ioctls, `authopen`, local time |
+| `idevice` | iPhone over USB: usbmuxd, pairing, AFC (pure Rust; TLS via `ring`) |
+| `mtp-rs` | Android over USB (MTP; pure Rust, Windows' own MTP stack on Windows) |
+| `tokio` | A small runtime for the two async phone libraries |
 | `windows-sys` (Windows) | Drive geometry and model via `DeviceIoControl` |
 
 ---
@@ -122,6 +127,8 @@ No npm, no build scripts, no extra CLI tools. Plain `cargo run`.
 
 To open a disk image straight away: `cargo run -- path/to/disk.img`.
 
+Something not showing up? `cargo run -- --diagnose` prints what Reclaimer can see — phones, the iPhone connection service, Android devices, drives — for a bug report.
+
 UI screenshots: `RECLAIMER_SHOTS=/some/dir cargo test scan_an_image` drives the app and saves a PNG per step.
 
 Regenerate the README screenshot with `RECLAIMER_README_SHOT=.github/assets/screenshot.png cargo test readme_screenshot -- --ignored`.
@@ -137,6 +144,8 @@ The app icon is drawn in code: `swift icons/make-icon.swift icons` (macOS) regen
 | macOS | `./packaging/macos/build-app.sh` | `target/release/Reclaimer.app` (about 11 MB) — drag it to Applications |
 | Windows | `cargo build --release` | `target\release\Reclaimer.exe`, icon embedded, no console window |
 | Linux | `./packaging/linux/install.sh` | Installs to `~/.local` with a menu entry and icon |
+
+Checking Windows or Linux builds from a Mac (no C cross-compiler needed): `cargo clippy --target x86_64-pc-windows-msvc --no-default-features --features tls-rustcrypto`.
 
 The macOS app is signed ad hoc, not notarized: on another Mac, open it the first time with right-click → Open.
 
@@ -160,9 +169,7 @@ Run the tests with `cargo test`. Filesystem tests use real images made by macOS 
 
 ## Roadmap
 
-- [ ] iPhone over USB (no backup needed) and encrypted backups
-- [ ] Android over USB — including the gallery's trash
-- [ ] HEIC thumbnails in the grid (HEIC photos currently show an icon)
+- [ ] Encrypted iPhone backups
 - [ ] NTFS files whose records spill into extension records (very fragmented files)
 - [ ] Ask for administrator rights automatically on Windows and Linux (macOS already does)
 
@@ -182,11 +189,18 @@ The internal SSD in Apple silicon and T2 Macs is always hardware-encrypted, so r
 
 ## Phones
 
-| Source | What comes back | Notes |
-|--------|-----------------|-------|
-| iPhone backup on this computer | Camera Roll (with **Recently Deleted**), Messages attachments, WhatsApp media | macOS: Reclaimer needs **Full Disk Access** to see backups — the Choose screen offers a shortcut. Encrypted backups are listed but can't be read yet. |
+Neither iPhones nor modern Android phones let a computer read their raw storage, so Reclaimer copies everything the phone hands over — including its trash. Plug the phone in and it appears on the Choose screen.
 
-Backups are found in `~/Library/Application Support/MobileSync/Backup` (macOS) and `%APPDATA%\Apple Computer\MobileSync\Backup` or `%USERPROFILE%\Apple\MobileSync\Backup` (Windows). A photo deleted from Recently Deleted *before* the backup was made isn't in it.
+| Source | What comes back | What you need |
+|--------|-----------------|---------------|
+| **iPhone on a cable** | The whole camera roll, **Recently Deleted** included (flagged as such) | Unlock the iPhone and tap **Trust** the first time. Windows: install **Apple Devices** (or iTunes) from the Microsoft Store. Linux: `usbmuxd`. |
+| **Android on a cable** | Photos, videos, audio and documents from shared storage, plus the gallery's **trash** (Android 11+ `.trashed-…` files, Samsung's `.Trash`) | Unlock the phone and choose **File Transfer** in its USB notification. Linux: allow USB access (udev rule below). |
+| **iPhone backup on this computer** | Camera Roll (with Recently Deleted), Messages attachments, WhatsApp media | macOS: **Full Disk Access** for Reclaimer — the Choose screen offers a shortcut. Encrypted backups are listed but can't be read yet. |
+
+Notes:
+- macOS's camera service (`ptpcamerad`) grabs Android phones the moment they're plugged in. Reclaimer asks it to step aside (it restarts by itself); if Photos, Image Capture or Android File Transfer is open, quit them.
+- Linux USB access for Android: `SUBSYSTEM=="usb", MODE="0666"` in `/etc/udev/rules.d/99-mtp.rules`, then `sudo udevadm control --reload-rules`.
+- Backups live in `~/Library/Application Support/MobileSync/Backup` (macOS) and `%APPDATA%\Apple Computer\MobileSync\Backup` or `%USERPROFILE%\Apple\MobileSync\Backup` (Windows). A photo removed from Recently Deleted *before* a backup isn't in it.
 
 ---
 

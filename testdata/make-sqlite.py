@@ -21,3 +21,31 @@ db.commit()
 db.execute("VACUUM")
 db.close()
 print("made", path, os.path.getsize(path), "bytes")
+
+# A database in WAL mode with changes still in its write-ahead log, as a live
+# phone's Photos library often is: the main file has rows 1–2; the log marks
+# row 2 trashed and adds row 3. Copied while open, before SQLite folds the
+# log back into the main file.
+import shutil
+work = os.path.join(os.path.dirname(__file__), "wal-work.db")
+for p in (work, work + "-wal", work + "-shm"):
+    if os.path.exists(p):
+        os.remove(p)
+db = sqlite3.connect(work)
+db.execute("PRAGMA journal_mode = WAL")
+db.execute("PRAGMA wal_autocheckpoint = 0")
+db.execute("CREATE TABLE ZASSET (Z_PK INTEGER PRIMARY KEY, ZTRASHEDSTATE INTEGER, ZFILENAME VARCHAR)")
+db.execute("INSERT INTO ZASSET VALUES (1, 0, 'IMG_0001.HEIC'), (2, 0, 'IMG_0002.HEIC')")
+db.commit()
+db.execute("PRAGMA wal_checkpoint(TRUNCATE)")  # rows 1–2 now in the main file
+db.execute("UPDATE ZASSET SET ZTRASHEDSTATE = 1 WHERE Z_PK = 2")
+db.execute("INSERT INTO ZASSET VALUES (3, 0, 'IMG_0003.HEIC')")
+db.commit()
+out = os.path.join(os.path.dirname(__file__), "sqlite-wal.db")
+shutil.copy(work, out)
+shutil.copy(work + "-wal", out + "-wal")
+db.close()
+for p in (work, work + "-wal", work + "-shm"):
+    if os.path.exists(p):
+        os.remove(p)
+print("made", out, "and its -wal")
