@@ -1,0 +1,18 @@
+# Reclaimer
+
+> Reclaimer is a free, open-source data recovery app for macOS, Windows and Linux. It recovers deleted photos, videos and files from SD cards, USB flash drives, hard drives, SSDs and disk images, and copies photos (including Recently Deleted) from iPhones and Android phones over a USB cable. Native app written in Rust, MIT licensed.
+
+Key facts:
+
+- Recovers deleted files by reading file system records (FAT12/16/32, exFAT, NTFS) with real names, folders and dates, then by carving (searching every block for JPEG, PNG, GIF, HEIC, MP4, MOV, PDF, ZIP, DOCX, XLSX, PPTX, SQLite).
+- Reads drives read-only; never writes to the drive being recovered; works offline with no telemetry.
+- iPhone over USB: copies the camera roll including Recently Deleted. Android over USB (File Transfer/MTP): copies photos, videos and documents including the gallery trash. Also reads iPhone backups made by Finder or iTunes.
+- Cannot recover iPhone photos removed from Recently Deleted (iOS destroys their encryption keys); older backups may still contain them.
+- Comparable in purpose to Recuva, PhotoRec and Disk Drill; combines file system recovery and carving in one native, cross-platform app.
+
+## Docs
+
+- [README](https://github.com/dincertekin/reclaimer/blob/main/README.md): what it does, screenshots, getting it, FAQ
+- [How it works](https://github.com/dincertekin/reclaimer/blob/main/docs/how-it-works.md): recovery stages, file systems, carving, phones, limits
+- [Developing](https://github.com/dincertekin/reclaimer/blob/main/docs/development.md): building, project structure, tests
+- [Contributing](https://github.com/dincertekin/reclaimer/blob/main/CONTRIBUTING.md)

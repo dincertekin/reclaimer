@@ -1,234 +1,170 @@
-# Reclaimer
+<p align="center">
+  <img src=".github/assets/banner.png" alt="Reclaimer: recover deleted photos, videos and files from disks, SD cards, USB drives and phones" width="100%">
+</p>
 
-A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk images to find and recover deleted files using file signature carving. Built as a hands-on Rust learning project, with a focus on clean code and real forensic techniques.
+<p align="center">
+  <a href="https://github.com/dincertekin/reclaimer/stargazers"><img src="https://img.shields.io/github/stars/dincertekin/reclaimer?style=flat&logo=github&color=111827" alt="GitHub stars"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-111827" alt="MIT license"></a>
+  <img src="https://img.shields.io/badge/macOS%20·%20Windows%20·%20Linux-111827" alt="macOS, Windows and Linux">
+  <img src="https://img.shields.io/badge/built%20with-Rust-111827?logo=rust" alt="Built with Rust">
+</p>
 
-> Work in progress — recovery works end-to-end on drives and disk images.
+<p align="center">
+  <b>Get back the photos, videos and files you deleted.</b><br>
+  From SD cards, USB flash drives, hard drives and disk images — and from your phone, over a cable.
+</p>
 
-![Reclaimer after a scan: recovered photos, a video, a document and other files in a grid, with the selected photo previewed in the inspector](.github/assets/screenshot.png)
-
-<sub>Scan of a demo disk image.</sub>
-
----
-
-## What Works Right Now
-
-- Scan a physical drive — internal disks, USB sticks, SD cards — on macOS, Windows and Linux
-- Or load a `.img`, `.dd`, `.raw`, or any raw disk image via the file picker or drag-and-drop
-- Drives are only ever opened read-only; unreadable (bad) sectors are skipped instead of stopping the scan
-- Phones on a USB cable: an iPhone's whole camera roll (Recently Deleted included), or an Android phone's photos, videos and documents (gallery trash included)
-- iPhone backups (Finder / iTunes): recovers the Camera Roll — including photos in Recently Deleted — plus Messages attachments and WhatsApp media
-- Real file names: reads FAT12/16/32, exFAT and NTFS to recover deleted files with their name, original folder and date — fragmented files included
-- Fast scanning — reads in large aligned chunks (about 1 GB in under a second from cache)
-- Structure-aware carving finds what the filesystem forgot — JPEG (JFIF and EXIF), PNG, GIF, MP4, MOV, HEIC, AVIF, PDF, ZIP, DOCX/XLSX/PPTX, SQLite
-- Each file reports whether it was recovered intact or only partially (truncated, or its space since reused)
-- Shows only lost files: space that belongs to files you still have is skipped
-- A calm, black-on-white interface: choose a drive, press Scan, watch photos appear
-- Photo thumbnails, filters (Photos, Videos & Audio, Documents), search, and an inspector with Open / Show in Finder
-- Stop a scan at any time and keep what was found so far
-- Recovered files go to a folder you choose (default `~/Documents/Reclaimer`), one subfolder per scan
-- Refuses to save onto the drive being scanned, since that could overwrite what you want back
+<p align="center">
+  <a href="#get-reclaimer">Get Reclaimer</a> ·
+  <a href="#what-it-recovers">What it recovers</a> ·
+  <a href="#features">Features</a> ·
+  <a href="docs/how-it-works.md">How it works</a> ·
+  <a href="#questions">Questions</a> ·
+  <a href="CONTRIBUTING.md">Contributing</a> ·
+  <a href="#would-you-like-to-support-reclaimer">Support</a>
+</p>
 
 ---
 
-## How Recovery Works
+Reclaimer is a free, open-source **data recovery app** for macOS, Windows and
+Linux. Choose where your files were lost, press **Scan**, and watch them come
+back — with their real names, folders and dates whenever the drive still
+remembers them.
 
-A scan has two stages.
+- **Simple** — one screen to choose, one button to scan. No settings to learn.
+- **Thorough** — reads what the file system remembers, then searches every block for what it forgot.
+- **Safe** — drives are only ever read, never written. Everything stays on your computer.
+- **Native and small** — a 14 MB app written in Rust. No browser engine, no subscription.
 
-**1. Ask the filesystem.** Deleting a file rarely erases its record; the filesystem just marks it unused. Reclaimer reads the partition table (MBR or GPT), then each volume's records:
+## Screenshots
 
-| File system | Where it's used | What a deleted file leaves behind |
-|-------------|-----------------|-----------------------------------|
-| FAT12 / 16 / 32 | SD cards, USB sticks, cameras | Name (first letter of the short name lost), size, date, first cluster |
-| exFAT | Large SD cards, USB drives | Full name, size, date, and whether the data was contiguous |
-| NTFS | Windows disks | Full name, folder, dates, and the exact map of every fragment |
+![Reclaimer after scanning an SD card: recovered photos with thumbnails, a video, a PDF and other files in a grid, and the selected photo's name, folder and date in the inspector](.github/assets/screenshot-results.png)
 
-Files come back with their real names, saved into their original folders. One whose space has since been reused is marked Partial.
+![Choosing where files were lost: an SD card, an iPhone and an Android phone connected by cable, and a disk image](.github/assets/screenshot-choose.png)
 
-**2. Carve.** Then every block is searched for files the filesystem has forgotten — on a reformatted card, or when a folder's own record was overwritten.
+<sub>Screenshots use a demo disk image and demo devices.</sub>
 
-### How carving works
+## Get Reclaimer
 
-When a file is deleted, the OS marks its sectors as free but rarely overwrites them immediately. Reclaimer reads every sector looking for known **magic bytes** — the fixed byte sequences that start each file type.
-
-Finding the start is easy; finding the **end** is what matters. Reclaimer never guesses: each format's carver walks the file's own structure until it ends.
-
-| Format | Starts with | Ends where |
-|--------|-------------|------------|
-| JPEG | `FF D8 FF` | `FF D9` reached by hopping segment to segment (skips EXIF thumbnails) |
-| PNG | `89 50 4E 47 0D 0A 1A 0A` | after the `IEND` chunk |
-| GIF | `GIF87a` / `GIF89a` | the `3B` trailer, after walking all blocks |
-| MP4 · MOV · HEIC · AVIF | `ftyp` box at offset 4 | after the last top-level box |
-| PDF | `%PDF-` | last `%%EOF` (or the exact length in linearized PDFs) |
-| ZIP · DOCX · XLSX · PPTX | `PK 03 04` | end-of-central-directory record that points back to this file |
-| SQLite | `SQLite format 3` | page size × page count from the header |
-
-After carving a file, the scan jumps past it rather than re-reading it.
-
----
-
-## Project Structure
-
-```
-src/
-├── main.rs              # eframe entry point, loads the Dock icon
-├── source/
-│   ├── mod.rs           # BlockSource trait, FileSource, Piece + save()
-│   ├── window.rs        # read-ahead buffer: few large aligned reads
-│   └── drives/          # list and open physical drives: macos.rs, windows.rs, linux.rs
-├── fs/                  # deleted files by name: partitions, fat, exfat, ntfs
-├── media.rs             # file categories by extension
-├── phone/               # iphone_usb.rs, android.rs (cable), iphone.rs (backups)
-├── sqlite.rs            # small read-only SQLite reader (phones keep their indexes in SQLite)
-├── scanner/
-│   ├── mod.rs           # scan() carves by content
-│   └── formats/         # one carver per format; FORMATS table in mod.rs
-└── ui/
-    ├── mod.rs           # app state, frame loop, actions
-    ├── theme.rs         # the design system: colours, type, buttons
-    ├── choose.rs        # screen 1: pick a drive or disk image
-    ├── results.rs       # screen 2: progress, grid, filters, inspector
-    ├── icons.rs         # line icons drawn in code
-    ├── thumbs.rs        # background thumbnail decoding with a capped cache
-    ├── scan.rs          # background scan thread
-    ├── types.rs         # shared types and formatting
-    └── tests.rs         # drives the real UI headlessly (egui_kittest)
-```
-
----
-
-## Tech Stack
-
-| Crate | Purpose |
-|-------|---------|
-| `eframe 0.34` + `egui 0.34` | GUI — immediate-mode, pure Rust, no web tech |
-| `rfd 0.15` | Native OS file picker (NSOpenPanel on macOS) |
-| `open 5` | Opens recovered files with the OS default app |
-| `image 0.25` | App icon and photo thumbnails (PNG, JPEG, GIF); HEIC, AVIF and RAW thumbnails come from the system (`sips` on macOS, WIC on Windows, `heif-convert` on Linux) |
-| Inter (bundled) | Typeface — [SIL Open Font License](assets/fonts/Inter-LICENSE.txt) |
-| `plist`, `libc` | iPhone backups, `diskutil` output; disk ioctls, `authopen`, local time |
-| `idevice` | iPhone over USB: usbmuxd, pairing, AFC (pure Rust; TLS via `ring`) |
-| `mtp-rs` | Android over USB (MTP; pure Rust, Windows' own MTP stack on Windows) |
-| `tokio` | A small runtime for the two async phone libraries |
-| `windows-sys` (Windows) | Drive geometry and model via `DeviceIoControl` |
-
----
-
-## Getting Started
-
-**Requirements:** Rust (install via [rustup.rs](https://rustup.rs))
+Ready-made downloads for macOS, Windows and Linux are on the way. Until
+then, Reclaimer builds with one command. Install [Rust](https://rustup.rs),
+then:
 
 ```bash
 git clone https://github.com/dincertekin/reclaimer
 cd reclaimer
-cargo run
+./packaging/macos/build-app.sh      # macOS: makes Reclaimer.app
+cargo build --release               # Windows: makes target\release\Reclaimer.exe
+./packaging/linux/install.sh        # Linux: installs it with a menu entry
 ```
 
-No npm, no build scripts, no extra CLI tools. Plain `cargo run`.
+Or just `cargo run` to try it.
 
-To open a disk image straight away: `cargo run -- path/to/disk.img`.
+**Lost something?** Stop using that card, drive or phone until you've
+recovered it. New files can land on the space your deleted ones occupy.
 
-Something not showing up? `cargo run -- --diagnose` prints what Reclaimer can see — phones, the iPhone connection service, Android devices, drives — for a bug report.
+## What it recovers
 
-UI screenshots: `RECLAIMER_SHOTS=/some/dir cargo test scan_an_image` drives the app and saves a PNG per step.
+| From | What comes back |
+|------|-----------------|
+| **SD cards and USB flash drives** | Deleted and formatted-away photos, videos and documents. Real names and folders on FAT32 and exFAT cards. |
+| **Hard drives, SSDs and Windows disks** | Deleted files with names, folders and dates from NTFS and FAT; everything else by searching every block. |
+| **Disk images** | `.img`, `.dd`, `.raw`, `.iso`, `.dmg` and other raw images — drag one onto the window. |
+| **iPhone, on a cable** | The whole camera roll, including photos in **Recently Deleted**. Unlock it and tap **Trust**. |
+| **Android phone, on a cable** | Photos, videos, audio and documents, including the gallery's **trash**. Choose **File Transfer** on the phone. |
+| **iPhone backups** | The Camera Roll (with Recently Deleted), Messages attachments and WhatsApp media from Finder or iTunes backups. |
 
-Regenerate the README screenshot with `RECLAIMER_README_SHOT=.github/assets/screenshot.png cargo test readme_screenshot -- --ignored`.
+## Features
 
-The app icon is drawn in code: `swift icons/make-icon.swift icons` (macOS) regenerates `icon.png`, `icon.icns` and `icon.ico`.
+|                     |                                                                                              |
+| ------------------- | -------------------------------------------------------------------------------------------- |
+| **Finding files**   | File system recovery for FAT12, FAT16, FAT32, exFAT and NTFS (MBR and GPT partitions), plus carving for JPEG, PNG, GIF, HEIC, AVIF, MP4, MOV, 3GP, PDF, ZIP, DOCX, XLSX, PPTX and SQLite |
+| **Real names**      | Original file names, folders and dates whenever the drive remembers them; fragmented files put back together |
+| **Phones**          | iPhone and Android over USB, Recently Deleted and gallery trash included; iPhone backups from Finder and iTunes |
+| **Results**         | Photo thumbnails (HEIC too), filters for photos, videos and documents, search, sort by date, name, kind or size, and a preview with where each file was |
+| **Honest results**  | Each file is marked **Intact** or **Partial**; files you still have aren't shown as "recovered" |
+| **Safety**          | Read-only access, bad sectors skipped, never saves onto the drive being scanned, works offline with no tracking |
+| **Fast**            | Reads in large chunks, as fast as the drive allows, and lets you stop any time, keeping what it found |
+| **Everywhere**      | macOS, Windows and Linux, from one codebase; recovered files go to `~/Documents/Reclaimer` or a folder you choose |
 
----
+Curious how it all works? Read [How Reclaimer recovers files](docs/how-it-works.md).
 
-## Building the App
+## Questions
 
-| Platform | Command | Result |
-|----------|---------|--------|
-| macOS | `./packaging/macos/build-app.sh` | `target/release/Reclaimer.app` (about 11 MB) — drag it to Applications |
-| Windows | `cargo build --release` | `target\release\Reclaimer.exe`, icon embedded, no console window |
-| Linux | `./packaging/linux/install.sh` | Installs to `~/.local` with a menu entry and icon |
+**Can it recover photos I deleted from my iPhone's Recently Deleted album?**
+No — and no other tool can either. iOS gives every file its own encryption
+key and destroys it when a file is deleted for good. What Reclaimer *can* do:
+recover everything still in Recently Deleted (up to 30 days), and read older
+iPhone backups, which may still hold the photo.
 
-Checking Windows or Linux builds from a Mac (no C cross-compiler needed): `cargo clippy --target x86_64-pc-windows-msvc --no-default-features --features tls-rustcrypto`.
+**Can it recover files from a formatted SD card or USB stick?**
+Often, yes. A quick format only clears the file system's records; the photos
+themselves usually stay until they're overwritten. Reclaimer finds them by
+searching every block.
 
-The macOS app is signed ad hoc, not notarized: on another Mac, open it the first time with right-click → Open.
+**Will scanning damage my drive or overwrite my files?**
+No. Reclaimer only reads drives, and it refuses to save recovered files onto
+the drive you're scanning.
 
----
+**Why can't it find files I deleted from my computer's SSD?**
+SSDs erase freed space in the background (it's called TRIM), often within
+minutes. SD cards, USB sticks and hard drives usually don't, so recovery
+there works much better.
 
-## Adding a New File Format
+**Does it upload my files anywhere?**
+No. Reclaimer works entirely offline, has no accounts and collects nothing.
 
-Create `src/scanner/formats/<name>.rs` with two functions:
+**How is it different from Recuva, PhotoRec or Disk Drill?**
+Reclaimer is free and open source, runs natively on macOS, Windows and
+Linux, combines file system recovery (real names) with carving (files the
+file system forgot) in one app, and also reads phones over a cable.
 
-```rust
-pub fn matches(header: &[u8]) -> bool                 // does a file start here?
-pub fn carve(w: &mut Window, start: u64, limit: u64)
-    -> io::Result<Option<Carved>>                     // where does it end?
-```
-
-Then add one line to `FORMATS` in `src/scanner/formats/mod.rs`. Use the existing carvers as a guide, and add a `sample()` fixture with tests.
-
-Run the tests with `cargo test`. Filesystem tests use real images made by macOS in `testdata/` (rebuild with `testdata/make-fixtures.sh`), a FAT32 volume written by the `fatfs` crate, and a hand-built NTFS volume. The SQLite reader and iPhone backups are tested on files made by the real SQLite (`testdata/make-sqlite.py`, `testdata/make-iphone-backup.py`). Among other things, they check that the two photos in `test.img` come back byte for byte (by size and checksum).
-
----
+**My phone or drive doesn't show up. What now?**
+For phones: use a data cable (some only charge), unlock the phone, and tap
+**Trust** (iPhone) or choose **File Transfer** (Android). If it still doesn't
+appear, run `Reclaimer --diagnose` and [open an issue](https://github.com/dincertekin/reclaimer/issues)
+with its output. Platform-specific notes are in
+[How it works](docs/how-it-works.md#permissions-on-each-platform).
 
 ## Roadmap
 
-- [ ] Encrypted iPhone backups
-- [ ] NTFS files whose records spill into extension records (very fragmented files)
-- [ ] Ask for administrator rights automatically on Windows and Linux (macOS already does)
+- Ready-made downloads for macOS, Windows and Linux
+- Encrypted iPhone backups
+- Very fragmented NTFS files (records that spill into extension records)
+- Asking for administrator rights automatically on Windows and Linux
 
----
+## Contributing
 
-## Reading Drives
+Bug reports, ideas and code are all welcome. Start with
+[CONTRIBUTING.md](CONTRIBUTING.md); [Developing Reclaimer](docs/development.md)
+covers building, the project structure and the tests.
 
-| Platform | Drives | Permission |
-|----------|--------|------------|
-| macOS | `/dev/rdiskN` via `diskutil` | The system password prompt (`authopen`) appears when you scan |
-| Windows | `\\.\PhysicalDriveN` | Run Reclaimer as administrator |
-| Linux | `/dev/sdX`, `/dev/nvmeXnY`, `/dev/mmcblkN` | Run with `sudo`, or join the `disk` group |
+Built with [Rust](https://www.rust-lang.org) and [egui](https://github.com/emilk/egui).
 
-The internal SSD in Apple silicon and T2 Macs is always hardware-encrypted, so raw reads of it return encrypted data. Carving works on external drives, USB sticks, SD cards and disk images.
+## Would you like to support Reclaimer?
 
----
+Reclaimer is free, and it stays free. If it got your files back, you can:
 
-## Phones
+- **[Buy me a coffee](https://buymeacoffee.com/dincertekin)**, or click
+  **Sponsor** at the top of the
+  [GitHub page](https://github.com/dincertekin/reclaimer): it keeps the work
+  going.
+- **Give it a star** on GitHub, so more people find it when they need it.
+- **Tell a friend** who just lost their photos.
 
-Neither iPhones nor modern Android phones let a computer read their raw storage, so Reclaimer copies everything the phone hands over — including its trash. Plug the phone in and it appears on the Choose screen.
+Thank you!
 
-| Source | What comes back | What you need |
-|--------|-----------------|---------------|
-| **iPhone on a cable** | The whole camera roll, **Recently Deleted** included (flagged as such) | Unlock the iPhone and tap **Trust** the first time. Windows: install **Apple Devices** (or iTunes) from the Microsoft Store. Linux: `usbmuxd`. |
-| **Android on a cable** | Photos, videos, audio and documents from shared storage, plus the gallery's **trash** (Android 11+ `.trashed-…` files, Samsung's `.Trash`) | Unlock the phone and choose **File Transfer** in its USB notification. Linux: allow USB access (udev rule below). |
-| **iPhone backup on this computer** | Camera Roll (with Recently Deleted), Messages attachments, WhatsApp media | macOS: **Full Disk Access** for Reclaimer — the Choose screen offers a shortcut. Encrypted backups are listed but can't be read yet. |
+## Star history
 
-Notes:
-- macOS's camera service (`ptpcamerad`) grabs Android phones the moment they're plugged in. Reclaimer asks it to step aside (it restarts by itself); if Photos, Image Capture or Android File Transfer is open, quit them.
-- Linux USB access for Android: `SUBSYSTEM=="usb", MODE="0666"` in `/etc/udev/rules.d/99-mtp.rules`, then `sudo udevadm control --reload-rules`.
-- Backups live in `~/Library/Application Support/MobileSync/Backup` (macOS) and `%APPDATA%\Apple Computer\MobileSync\Backup` or `%USERPROFILE%\Apple\MobileSync\Backup` (Windows). A photo removed from Recently Deleted *before* a backup isn't in it.
-
----
-
-## Supported File Systems
-
-| File System | Status |
-|-------------|--------|
-| FAT12 / FAT16 / FAT32 | Working — names, folders, dates |
-| exFAT | Working — full names, folders, dates, fragmented files |
-| NTFS | Working — full names, folders, dates, fragmented and tiny files |
-| Anything else (APFS, ext4, …) | Carving only |
-
-Partition tables: MBR (with logical partitions), GPT, or none (cards formatted whole).
-
----
-
-## Learning Goals
-
-This is a personal Rust learning project. Priorities in order: learning Rust correctly → working features → speed of development. The code is kept in small focused modules, avoids premature abstraction, and comments explain the *why* rather than the *what*.
-
----
-
-## Disclaimer
-
-Reclaimer is for legitimate data recovery and forensic learning only. Always recover files to a separate drive or folder — never write to the source disk, as that can overwrite the data you are trying to recover.
-
----
+<a href="https://star-history.com/#dincertekin/reclaimer&Date">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=dincertekin/reclaimer&type=Date&theme=dark">
+    <img alt="Star history" src="https://api.star-history.com/svg?repos=dincertekin/reclaimer&type=Date" width="600">
+  </picture>
+</a>
 
 ## License
 
-MIT — see [LICENSE](./LICENSE).
+[MIT](LICENSE) © Dinçer Tekin
+
+Reclaimer is for recovering your own files and for legitimate forensic work.
