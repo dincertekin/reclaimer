@@ -3,11 +3,15 @@
 //
 // Usage (macOS):  swift icons/make-icon.swift icons
 //
-// The mark: a black document reassembling from blocks — scattered sectors
-// coming back together, which is what carving does. Drawn on a 1024-unit
-// grid and rendered fresh at each size so small icons stay crisp.
+// Also writes .github/assets/banner.png (1280×640): the README banner and
+// GitHub's social preview image.
+//
+// The mark: an R whose leg makes a U-turn and rises as an arrow — the
+// letter itself "coming back". Drawn on a 1024-unit grid and rendered
+// fresh at each size so small icons stay crisp.
 
 import CoreGraphics
+import CoreText
 import Foundation
 import ImageIO
 import UniformTypeIdentifiers
@@ -53,46 +57,46 @@ func render(_ size: Int) -> CGImage {
     ctx.setLineWidth(2)
     ctx.strokePath()
 
-    // The document: 6 × 8 cells; its left column is broken into blocks.
-    let cell: CGFloat = 56
-    let (left, top) = (CGFloat(428), CGFloat(288))
-    let right = left + 6 * cell, bottom = top + 8 * cell
-    let fold: CGFloat = 120
+    // The mark, drawn as thick strokes with round ends.
+    ctx.translateBy(x: -26, y: 0) // optical centring: the arrow adds weight on the right
+    ctx.setStrokeColor(ink)
+    ctx.setLineWidth(84)
+    ctx.setLineCap(.round)
+    ctx.setLineJoin(.round)
 
-    let page = CGMutablePath()
-    page.move(to: CGPoint(x: left + cell - 1, y: top))
-    page.addLine(to: CGPoint(x: right - fold, y: top))
-    page.addLine(to: CGPoint(x: right, y: top + fold))
-    page.addLine(to: CGPoint(x: right, y: bottom))
-    page.addLine(to: CGPoint(x: left + cell - 1, y: bottom))
-    page.closeSubpath()
-    for row in [0, 1, 3, 4, 6, 7] { // column 0, with gaps where blocks are missing
-        page.addRect(CGRect(x: left, y: top + CGFloat(row) * cell, width: cell, height: cell))
-    }
-    ctx.addPath(page)
+    // Stem and bowl of the R.
+    let letter = CGMutablePath()
+    letter.move(to: CGPoint(x: 352, y: 736))
+    letter.addLine(to: CGPoint(x: 352, y: 296))
+    letter.addLine(to: CGPoint(x: 500, y: 296))
+    letter.addArc(center: CGPoint(x: 500, y: 404), radius: 108, startAngle: -.pi / 2, endAngle: .pi / 2, clockwise: false)
+    letter.addLine(to: CGPoint(x: 352, y: 512))
+    ctx.addPath(letter)
+    ctx.strokePath()
+
+    // The leg flows down into a U-turn, then rises straight up...
+    let r: CGFloat = 84
+    let turn = CGPoint(x: 600, y: 652)
+    let leg = CGMutablePath()
+    leg.move(to: CGPoint(x: 440, y: 512))
+    leg.addQuadCurve(to: CGPoint(x: turn.x - r, y: turn.y), control: CGPoint(x: turn.x - r, y: 540))
+    leg.addArc(center: turn, radius: r, startAngle: .pi, endAngle: 0, clockwise: true)
+    leg.addLine(to: CGPoint(x: turn.x + r, y: 580))
+    ctx.setLineCap(.butt)
+    ctx.addPath(leg)
+    ctx.strokePath()
+
+    // ...into an arrowhead pointing back up, its corners softened.
+    let tipX = turn.x + r
+    let head = CGMutablePath()
+    head.move(to: CGPoint(x: tipX, y: 476))
+    head.addLine(to: CGPoint(x: tipX + 90, y: 592))
+    head.addLine(to: CGPoint(x: tipX - 90, y: 592))
+    head.closeSubpath()
+    ctx.addPath(head)
     ctx.setFillColor(ink)
-    ctx.fillPath()
-
-    // Folded corner.
-    let corner = CGMutablePath()
-    corner.move(to: CGPoint(x: right - fold, y: top))
-    corner.addLine(to: CGPoint(x: right - fold, y: top + fold))
-    corner.addLine(to: CGPoint(x: right, y: top + fold))
-    corner.closeSubpath()
-    ctx.addPath(corner)
-    ctx.setFillColor(gray(0x8E))
-    ctx.fillPath()
-
-    // Blocks on their way back, fainter the further out they are.
-    let inset: CGFloat = 7
-    let blocks: [(col: Int, rows: [Int], alpha: CGFloat)] = [(-1, [2, 5, 7], 0.85), (-2, [1, 4], 0.5), (-3, [3, 6], 0.22)]
-    for (col, rows, alpha) in blocks {
-        for row in rows {
-            let r = CGRect(x: left + CGFloat(col) * cell, y: top + CGFloat(row) * cell, width: cell, height: cell)
-            ctx.setFillColor(ink.copy(alpha: alpha)!)
-            ctx.fill(r.insetBy(dx: inset, dy: inset))
-        }
-    }
+    ctx.setLineWidth(18)
+    ctx.drawPath(using: .fillStroke)
     return ctx.makeImage()!
 }
 
@@ -135,4 +139,38 @@ for (size, image) in zip(sizes, images) {
 }
 images.forEach { ico.append($0) }
 try ico.write(to: out.appendingPathComponent("icon.ico"))
-print("Wrote icon.png, icon.icns, icon.ico to \(out.path)")
+// Banner: the icon beside the name and what it does, in Inter.
+func banner() -> CGImage {
+    let (w, h) = (1280, 640)
+    let ctx = CGContext(
+        data: nil, width: w, height: h, bitsPerComponent: 8, bytesPerRow: 0,
+        space: CGColorSpace(name: CGColorSpace.sRGB)!,
+        bitmapInfo: CGImageAlphaInfo.premultipliedLast.rawValue)!
+    ctx.setFillColor(gray(255))
+    ctx.fill(CGRect(x: 0, y: 0, width: w, height: h))
+
+    let fonts = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../assets/fonts")
+    for file in ["Inter-Regular.ttf", "Inter-SemiBold.ttf"] {
+        CTFontManagerRegisterFontsForURL(fonts.appendingPathComponent(file) as CFURL, .process, nil)
+    }
+    // CoreGraphics counts y from the bottom.
+    ctx.draw(render(380), in: CGRect(x: 110, y: 130, width: 380, height: 380))
+    func text(_ string: String, font: String, size: CGFloat, color: CGColor, x: CGFloat, baseline: CGFloat) {
+        let attributes: [NSAttributedString.Key: Any] = [
+            NSAttributedString.Key(kCTFontAttributeName as String): CTFontCreateWithName(font as CFString, size, nil),
+            NSAttributedString.Key(kCTForegroundColorAttributeName as String): color,
+        ]
+        ctx.textPosition = CGPoint(x: x, y: baseline)
+        CTLineDraw(CTLineCreateWithAttributedString(NSAttributedString(string: string, attributes: attributes)), ctx)
+    }
+    let x: CGFloat = 516
+    text("Reclaimer", font: "Inter-SemiBold", size: 100, color: ink, x: x - 6, baseline: 368)
+    text("Recover deleted photos, videos and files", font: "Inter-Regular", size: 30, color: gray(0x55), x: x, baseline: 300)
+    text("from disks, SD cards, USB drives and phones.", font: "Inter-Regular", size: 30, color: gray(0x55), x: x, baseline: 260)
+    text("Free  ·  Open source  ·  macOS, Windows, Linux", font: "Inter-Regular", size: 22, color: gray(0x8E), x: x, baseline: 204)
+    return ctx.makeImage()!
+}
+let assets = URL(fileURLWithPath: #filePath).deletingLastPathComponent().appendingPathComponent("../.github/assets")
+try png(banner()).write(to: assets.appendingPathComponent("banner.png"))
+
+print("Wrote icon.png, icon.icns, icon.ico to \(out.path), and the README banner")

@@ -1,3 +1,4 @@
+use std::cmp::Ordering;
 use std::path::{Path, PathBuf};
 pub use crate::media::Category;
 use crate::fs::Timestamp;
@@ -39,6 +40,132 @@ impl Filter {
             Filter::All => true,
             Filter::Category(c) => file.category == c,
             Filter::RecentlyDeleted => file.recently_deleted,
+        }
+    }
+}
+
+/// What the results are ordered by.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum SortKey {
+    Date,
+    Name,
+    Kind,
+    Size,
+}
+
+impl SortKey {
+    pub const ALL: [SortKey; 4] = [SortKey::Date, SortKey::Name, SortKey::Kind, SortKey::Size];
+
+    pub fn label(self) -> &'static str {
+        match self {
+            SortKey::Date => "Date Modified",
+            SortKey::Name => "Name",
+            SortKey::Kind => "Kind",
+            SortKey::Size => "Size",
+        }
+    }
+
+    /// How each direction reads for this key: (ascending, descending).
+    pub fn directions(self) -> (&'static str, &'static str) {
+        match self {
+            SortKey::Date => ("Oldest First", "Newest First"),
+            SortKey::Name | SortKey::Kind => ("A to Z", "Z to A"),
+            SortKey::Size => ("Smallest First", "Largest First"),
+        }
+    }
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub struct Sort {
+    pub key:        SortKey,
+    pub descending: bool,
+}
+
+impl Default for Sort {
+    fn default() -> Self {
+        Sort::by(SortKey::Date)
+    }
+}
+
+impl Sort {
+    /// A key in its natural direction: newest and largest first, names A to Z.
+    pub fn by(key: SortKey) -> Self {
+        Sort { key, descending: matches!(key, SortKey::Date | SortKey::Size) }
+    }
+
+    pub fn compare(self, a: &FoundFile, b: &FoundFile) -> Ordering {
+        let order = match self.key {
+            // Files without a date (found by content) always go last.
+            SortKey::Date => match (a.modified, b.modified) {
+                (Some(x), Some(y)) => x.cmp(&y),
+                (Some(_), None) => return Ordering::Less,
+                (None, Some(_)) => return Ordering::Greater,
+                (None, None) => Ordering::Equal,
+            },
+            SortKey::Name => natural_cmp(&a.filename, &b.filename),
+            SortKey::Kind => a.kind.to_lowercase().cmp(&b.kind.to_lowercase()).then_with(|| natural_cmp(&a.filename, &b.filename)),
+            SortKey::Size => a.size.cmp(&b.size),
+        };
+        if self.descending { order.reverse() } else { order }
+    }
+
+    /// For remembering the choice between launches: "date-desc".
+    pub fn to_setting(self) -> String {
+        let key = match self.key {
+            SortKey::Date => "date",
+            SortKey::Name => "name",
+            SortKey::Kind => "kind",
+            SortKey::Size => "size",
+        };
+        format!("{key}-{}", if self.descending { "desc" } else { "asc" })
+    }
+
+    pub fn from_setting(text: &str) -> Option<Self> {
+        let (key, direction) = text.split_once('-')?;
+        let key = match key {
+            "date" => SortKey::Date,
+            "name" => SortKey::Name,
+            "kind" => SortKey::Kind,
+            "size" => SortKey::Size,
+            _ => return None,
+        };
+        Some(Sort { key, descending: direction == "desc" })
+    }
+}
+
+/// Compares names the way Finder does: numbers by value, so "IMG_2" comes
+/// before "IMG_10", and letters ignoring case.
+pub fn natural_cmp(a: &str, b: &str) -> Ordering {
+    let (mut a, mut b) = (a.chars().peekable(), b.chars().peekable());
+    loop {
+        match (a.peek().copied(), b.peek().copied()) {
+            (None, None) => return Ordering::Equal,
+            (None, Some(_)) => return Ordering::Less,
+            (Some(_), None) => return Ordering::Greater,
+            (Some(x), Some(y)) if x.is_ascii_digit() && y.is_ascii_digit() => {
+                let take = |it: &mut std::iter::Peekable<std::str::Chars>| {
+                    let mut digits = String::new();
+                    while let Some(&c) = it.peek().filter(|c| c.is_ascii_digit()) {
+                        digits.push(c);
+                        it.next();
+                    }
+                    digits
+                };
+                let (x, y) = (take(&mut a), take(&mut b));
+                let (xt, yt) = (x.trim_start_matches('0'), y.trim_start_matches('0'));
+                let order = xt.len().cmp(&yt.len()).then_with(|| xt.cmp(yt)).then_with(|| x.len().cmp(&y.len()));
+                if order != Ordering::Equal {
+                    return order;
+                }
+            }
+            (Some(x), Some(y)) => {
+                let order = x.to_lowercase().cmp(y.to_lowercase());
+                if order != Ordering::Equal {
+                    return order;
+                }
+                a.next();
+                b.next();
+            }
         }
     }
 }
@@ -212,6 +339,10 @@ mod tests {
         assert_eq!(fmt_remaining(65.0 * 60.0), "about 1 hr 5 min left");
         assert_eq!(fmt_date(Timestamp { year: 2026, month: 11, day: 7, hour: 4, minute: 5 }), "7 Nov 2026 at 04:05");
         assert_eq!(kind_name("jpg"), "JPEG");
+        assert_eq!(natural_cmp("IMG_2.jpg", "IMG_10.jpg"), Ordering::Less);
+        assert_eq!(natural_cmp("img_2.JPG", "IMG_2.jpg"), Ordering::Equal);
+        assert_eq!(natural_cmp("a", "a1"), Ordering::Less);
+        assert_eq!(Sort::from_setting(&Sort::by(SortKey::Size).to_setting()), Some(Sort::by(SortKey::Size)));
         assert_eq!(extension_of("IMG_0001.JPG"), "jpg");
         assert_eq!(safe_name("a/b:c?. "), "a_b_c_");
         assert_eq!(safe_name(".."), "_");

@@ -56,7 +56,8 @@ impl Modified {
     }
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+// Field order matters: the derived ordering compares year first, then month...
+#[derive(Clone, Copy, Debug, PartialEq, Eq, PartialOrd, Ord)]
 pub struct Timestamp {
     pub year:   u16,
     pub month:  u8,

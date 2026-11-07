@@ -20,6 +20,7 @@ impl ReclaimerApp {
         let output_dir = self.output_dir.clone();
 
         self.cancel_scan();
+        self.scan_number += 1;
         self.phase = Phase::Scanning;
         self.found.clear();
         self.thumbs.clear();

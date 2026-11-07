@@ -65,12 +65,15 @@ pub fn install(ctx: &egui::Context) {
         w.corner_radius = CornerRadius::same(8);
         w.expansion = 0.0;
     }
+    v.widgets.inactive.weak_bg_fill = SURFACE; // menu buttons match the search field
     v.widgets.hovered.weak_bg_fill = HOVER;
     v.window_shadow = egui::Shadow::NONE;
     v.popup_shadow = egui::Shadow { offset: [0, 4], blur: 16, spread: 0, color: Color32::from_black_alpha(24) };
     v.window_stroke = Stroke::new(1.0, LINE);
     style.spacing.item_spacing = Vec2::new(8.0, 8.0);
     style.spacing.button_padding = Vec2::new(12.0, 6.0);
+    style.spacing.menu_margin = egui::Margin::same(6);
+    style.visuals.menu_corner_radius = CornerRadius::same(RADIUS);
     ctx.set_style_of(egui::Theme::Light, style.clone());
     ctx.set_style_of(egui::Theme::Dark, style);
 }
@@ -96,6 +99,32 @@ fn button(ui: &mut Ui, label: &str, size: Vec2, enabled: bool, fill: Color32, ho
     ui.painter().text(rect.center(), egui::Align2::CENTER_CENTER, label, semibold(14.0), text);
     response.widget_info(|| egui::WidgetInfo::labeled(egui::WidgetType::Button, enabled, label));
     if enabled { response.on_hover_cursor(CursorIcon::PointingHand) } else { response }
+}
+
+const MENU_WIDTH: f32 = 196.0;
+
+/// A row in a dropdown menu, macOS-style: a checkmark beside the current
+/// choice, a soft highlight only under the pointer, room around the text.
+pub fn menu_item(ui: &mut Ui, label: &str, checked: bool) -> Response {
+    let (rect, response) = ui.allocate_exact_size(Vec2::new(MENU_WIDTH, 30.0), Sense::click());
+    if response.hovered() {
+        ui.painter().rect_filled(rect, CornerRadius::same(6), HOVER);
+    }
+    if checked {
+        let c = egui::pos2(rect.left() + 16.0, rect.center().y);
+        let stroke = Stroke::new(1.75, BLACK);
+        ui.painter().line_segment([c + Vec2::new(-4.0, 0.0), c + Vec2::new(-1.0, 3.5)], stroke);
+        ui.painter().line_segment([c + Vec2::new(-1.0, 3.5), c + Vec2::new(5.0, -4.0)], stroke);
+    }
+    ui.painter().text(egui::pos2(rect.left() + 32.0, rect.center().y), egui::Align2::LEFT_CENTER, label, regular(14.0), BLACK);
+    response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, true, checked, label));
+    response.on_hover_cursor(CursorIcon::PointingHand)
+}
+
+/// A hairline between groups in a dropdown menu.
+pub fn menu_separator(ui: &mut Ui) {
+    let (rect, _) = ui.allocate_exact_size(Vec2::new(MENU_WIDTH, 11.0), Sense::hover());
+    ui.painter().hline(rect.shrink2(Vec2::new(8.0, 0.0)).x_range(), rect.center().y, Stroke::new(1.0, LINE));
 }
 
 /// Inline text that acts like a link.

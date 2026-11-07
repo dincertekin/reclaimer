@@ -148,8 +148,34 @@ impl ReclaimerApp {
                         .desired_width(200.0)
                         .margin(Margin::symmetric(10, 6)),
                 );
+                ui.add_space(4.0);
+                self.sort_menu(ui);
             });
         });
+    }
+
+    /// "Date Modified ↓" — a Finder-style menu: what to sort by, then which way.
+    fn sort_menu(&mut self, ui: &mut Ui) {
+        let (ascending, descending) = self.sort.key.directions();
+        let arrow = if self.sort.descending { "\u{2193}" } else { "\u{2191}" };
+        let label = egui::RichText::new(format!("{}  {arrow}", self.sort.key.label())).font(semibold(13.0)).color(GRAY_1);
+        let response = ui.menu_button(label, |ui| {
+            ui.spacing_mut().item_spacing.y = 0.0;
+            for key in SortKey::ALL {
+                if menu_item(ui, key.label(), self.sort.key == key).clicked() {
+                    self.sort = Sort::by(key);
+                    ui.close();
+                }
+            }
+            menu_separator(ui);
+            for (text, descending) in [(ascending, false), (descending, true)] {
+                if menu_item(ui, text, self.sort.descending == descending).clicked() {
+                    self.sort.descending = descending;
+                    ui.close();
+                }
+            }
+        });
+        response.response.on_hover_text("Sort");
     }
 
     // ── Grid ───────────────────────────────────────────────────────────────

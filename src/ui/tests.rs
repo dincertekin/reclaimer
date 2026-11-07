@@ -60,17 +60,42 @@ fn scan_an_image_and_browse_the_results() {
 
 
 /// Regenerates the README screenshot at Retina scale:
-/// `RECLAIMER_README_SHOT=.github/assets/screenshot.png cargo test readme_screenshot -- --ignored`
+/// Regenerates the README screenshots at Retina scale (1080×720 points):
+/// `RECLAIMER_README_SHOTS=.github/assets cargo test readme_screenshots -- --ignored`
 #[test]
 #[ignore]
-fn readme_screenshot() {
+fn readme_screenshots() {
+    use crate::phone::{Phone, PhoneKind, PhoneStatus};
     use crate::scanner::samples;
-    let Some(target) = std::env::var_os("RECLAIMER_README_SHOT") else { return };
+    use crate::source::drives::Drive;
+    use super::types::Source;
+    let Some(dir) = std::env::var_os("RECLAIMER_README_SHOTS").map(PathBuf::from) else { return };
     let temp = std::env::temp_dir().join(format!("reclaimer-readme-{}", std::process::id()));
     std::fs::create_dir_all(&temp).unwrap();
+    let harness = || Harness::builder().with_size(vec2(1080.0, 720.0)).with_pixels_per_point(2.0);
 
-    // A demo card: the exFAT fixture (two deleted photos, found by name)
-    // plus a few files only carving can find.
+    // 1. Choose: demo devices, the SD card selected.
+    let mut choose = harness().build_eframe(|cc| ReclaimerApp::new(cc, None));
+    step_until(&mut choose, |app| app.drives_listed.is_some());
+    let card = Drive {
+        path: "/dev/rdisk4".into(), name: "SD Card".into(), model: "SD Card Reader".into(),
+        size: 64_000_000_000, removable: true, encrypted: false, mount_points: Vec::new(),
+    };
+    let app = choose.state_mut();
+    app.drives = vec![card.clone()];
+    app.backups.clear();
+    app.backups_locked = false;
+    app.phones = vec![
+        Phone { kind: PhoneKind::IPhone, id: "demo-iphone".into(), name: "My iPhone".into(), status: PhoneStatus::Ready },
+        Phone { kind: PhoneKind::Android, id: "demo-android".into(), name: "Pixel 9".into(), status: PhoneStatus::Ready },
+    ];
+    app.source = Some(Source::Drive(card));
+    app.drives_listed = Some(std::time::Instant::now()); // keep the demo devices on screen
+    choose.run_steps(3);
+    choose.render().unwrap().save(dir.join("screenshot-choose.png")).unwrap();
+
+    // 2. Results: the exFAT fixture (two deleted photos, found by name) plus
+    // a few files only carving can find.
     let mut image = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/exfat.img")).unwrap();
     for file in [samples::pdf(), samples::mp4(), samples::zip(), samples::sqlite()] {
         image.resize(image.len().next_multiple_of(512) + 4096, 0);
@@ -78,22 +103,17 @@ fn readme_screenshot() {
     }
     let image_path = temp.join("demo.img");
     std::fs::write(&image_path, image).unwrap();
-
-    // 2× scale: the window is 1080×720 points, rendered at 2160×1440.
-    let mut harness = Harness::builder()
-        .with_size(vec2(1080.0, 720.0))
-        .with_pixels_per_point(2.0)
-        .build_eframe(|cc| ReclaimerApp::new(cc, Some(image_path)));
-    harness.state_mut().output_dir = temp.join("out");
-    let ctx = harness.ctx.clone();
-    harness.state_mut().start_scan(ctx);
-    step_until(&mut harness, |app| app.phase == Phase::Done);
+    let mut results = harness().build_eframe(|cc| ReclaimerApp::new(cc, Some(image_path)));
+    results.state_mut().output_dir = temp.join("out");
+    let ctx = results.ctx.clone();
+    results.state_mut().start_scan(ctx);
+    step_until(&mut results, |app| app.phase == Phase::Done);
     let home = std::env::home_dir().unwrap();
-    harness.state_mut().scan_folder = Some(home.join("Documents/Reclaimer/demo.img")); // as a user would see it
-    harness.state_mut().selected = Some(0);
-    step_until(&mut harness, |app| app.thumbs.idle());
+    results.state_mut().scan_folder = Some(home.join("Documents/Reclaimer/demo.img")); // as a user would see it
+    results.state_mut().selected = Some(0);
+    step_until(&mut results, |app| app.thumbs.idle());
+    results.render().unwrap().save(dir.join("screenshot-results.png")).unwrap();
 
-    harness.render().unwrap().save(target).unwrap();
     std::fs::remove_dir_all(temp).unwrap();
 }
 
@@ -228,5 +248,44 @@ fn phone_files_land_in_their_folders() {
 fn read_photo() -> Vec<u8> {
     let image = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/test.img")).unwrap();
     image[1024..1024 + 94_978].to_vec()
+}
+
+
+#[test]
+fn results_sort_by_date_name_kind_and_size() {
+    use super::types::{Category, FoundFile, Sort, SortKey};
+    use crate::fs::Timestamp;
+
+    let mut harness = Harness::builder().with_size(vec2(1080.0, 720.0)).build_eframe(|cc| ReclaimerApp::new(cc, None));
+    let file = |name: &str, kind: &str, size: u64, day: Option<u8>| FoundFile {
+        kind: kind.into(),
+        extension: name.rsplit('.').next().unwrap().into(),
+        offset: None,
+        size,
+        filename: name.into(),
+        path: PathBuf::new(),
+        category: Category::Photos,
+        complete: true,
+        folder: None,
+        modified: day.map(|day| Timestamp { year: 2026, month: 11, day, hour: 0, minute: 0 }),
+        recently_deleted: false,
+    };
+    harness.state_mut().found = vec![
+        file("IMG_10.jpg", "JPEG", 300, Some(2)),
+        file("IMG_2.jpg", "JPEG", 100, Some(5)),
+        file("clip.mov", "MOV", 900, None), // found by content: no date
+        file("a.pdf", "PDF", 50, Some(1)),
+    ];
+    let order = |h: &mut Harness<'_, ReclaimerApp>, sort: Sort| {
+        h.state_mut().sort = sort;
+        let app = h.state();
+        app.visible_files().iter().map(|&i| app.found[i].filename.clone()).collect::<Vec<_>>()
+    };
+
+    assert_eq!(order(&mut harness, Sort::default()), ["IMG_2.jpg", "IMG_10.jpg", "a.pdf", "clip.mov"], "newest first, undated last");
+    assert_eq!(order(&mut harness, Sort { key: SortKey::Date, descending: false }), ["a.pdf", "IMG_10.jpg", "IMG_2.jpg", "clip.mov"], "undated stay last");
+    assert_eq!(order(&mut harness, Sort::by(SortKey::Name)), ["a.pdf", "clip.mov", "IMG_2.jpg", "IMG_10.jpg"], "natural order");
+    assert_eq!(order(&mut harness, Sort::by(SortKey::Kind)), ["IMG_2.jpg", "IMG_10.jpg", "clip.mov", "a.pdf"]);
+    assert_eq!(order(&mut harness, Sort::by(SortKey::Size)), ["clip.mov", "IMG_10.jpg", "IMG_2.jpg", "a.pdf"], "largest first");
 }
 
