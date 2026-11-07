@@ -5,10 +5,15 @@ mod ui;
 fn main() -> eframe::Result<()> {
     let icon = load_icon();
 
+    // On macOS the title bar is transparent, so the window is one white
+    // surface with just the traffic lights — like Apple's own apps.
     let mut viewport = eframe::egui::ViewportBuilder::default()
         .with_title("Reclaimer")
-        .with_inner_size([1100.0, 700.0])
-        .with_min_inner_size([800.0, 500.0]);
+        .with_inner_size([1080.0, 720.0])
+        .with_min_inner_size([760.0, 560.0])
+        .with_fullsize_content_view(true)
+        .with_titlebar_shown(false)
+        .with_title_shown(false);
 
     if let Some(icon) = icon {
         viewport = viewport.with_icon(icon);
@@ -22,7 +27,11 @@ fn main() -> eframe::Result<()> {
     eframe::run_native(
         "Reclaimer",
         options,
-        Box::new(|cc| Ok(Box::new(ui::ReclaimerApp::new(cc)))),
+        Box::new(|cc| {
+            // `reclaimer card.img` opens that image, ready to scan.
+            let image = std::env::args_os().nth(1).map(std::path::PathBuf::from);
+            Ok(Box::new(ui::ReclaimerApp::new(cc, image)))
+        }),
     )
 }
 

@@ -4,9 +4,10 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::sync::{mpsc, Arc};
 use eframe::egui;
 use super::ReclaimerApp;
-use super::types::{Category, DotState, FoundFile, Phase, ScanMsg, Source};
+use std::time::Instant;
+use super::types::{Category, FoundFile, Phase, ScanMsg, Source};
 use crate::scanner::{self, ScanEvent};
-use crate::source::{drives, FileSource};
+use crate::source::{drives, BlockSource, FileSource};
 
 impl ReclaimerApp {
     pub(super) fn start_scan(&mut self, ctx: egui::Context) {
@@ -15,16 +16,16 @@ impl ReclaimerApp {
 
         self.cancel_scan();
         self.phase = Phase::Scanning;
-        self.found_files = Vec::new();
-        self.selected_idx = None;
-        self.scanned_sectors = 0;
-        self.total_sectors = 0;
-        self.found_count = 0;
-        self.status_text = match &source {
-            Source::Drive(d) => format!("Waiting for permission to read {}\u{2026}", d.name),
-            Source::Image(_) => "Scanning\u{2026}".into(),
-        };
-        self.dot_state = DotState::Scanning;
+        self.found.clear();
+        self.thumbs.clear();
+        self.selected = None;
+        self.filter = None;
+        self.search.clear();
+        self.progress = (0, 0);
+        self.started = Instant::now();
+        self.stopped = false;
+        self.scan_folder = None;
+        self.error = None;
 
         let (tx, rx) = mpsc::channel();
         let cancel = Arc::new(AtomicBool::new(false));
@@ -39,6 +40,13 @@ impl ReclaimerApp {
             let _ = tx.send(msg);
             ctx.request_repaint();
         });
+    }
+
+    /// Stop button: end the scan but keep what was found.
+    pub(super) fn stop_scan(&mut self) {
+        self.cancel_scan();
+        self.phase = Phase::Done;
+        self.stopped = true;
     }
 
     /// Stops a running scan; its thread exits at the next block.
@@ -82,13 +90,16 @@ fn run_scan(
 
     let folder = unique_folder(output_dir, &source.name());
     std::fs::create_dir_all(&folder)?;
+    let _ = tx.send(ScanMsg::Started { folder: folder.clone() });
+    // The clock starts once permission is granted, so the estimate is honest.
+    let _ = tx.send(ScanMsg::Progress { done: 0, total: reader.size() });
 
     let mut found = 0u32;
     let mut save_error = None;
 
     scanner::scan(&mut reader, cancel, |event| match event {
         ScanEvent::Progress { done, total } => {
-            let _ = tx.send(ScanMsg::Progress { scanned: done / 512, total: total / 512, found });
+            let _ = tx.send(ScanMsg::Progress { done, total });
             ctx.request_repaint();
         }
         ScanEvent::Found(item) => {
@@ -98,15 +109,14 @@ fn run_scan(
                 Ok(()) => {
                     found += 1;
                     let _ = tx.send(ScanMsg::Found(FoundFile {
-                        file_type:  item.kind.name.to_string(),
-                        extension:  item.kind.ext.to_string(),
-                        sector:     item.offset / 512,
-                        offset:     item.offset,
-                        size_bytes: item.len as usize,
+                        kind:      item.kind.name,
+                        extension: item.kind.ext,
+                        offset:    item.offset,
+                        size:      item.len,
                         filename,
                         path,
-                        category:   Category::from_ext(item.kind.ext),
-                        complete:   item.complete,
+                        category:  Category::from_ext(item.kind.ext),
+                        complete:  item.complete,
                     }));
                     ctx.request_repaint();
                 }

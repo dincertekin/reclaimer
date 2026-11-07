@@ -2,7 +2,7 @@
 
 A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk images to find and recover deleted files using file signature carving. Built as a hands-on Rust learning project, with a focus on clean code and real forensic techniques.
 
-> Work in progress — core carving pipeline works end-to-end, GUI is functional.
+> Work in progress — recovery works end-to-end on drives and disk images.
 
 ![Reclaimer after a scan: recovered files listed with type and size, and a detail panel for the selected file](.github/assets/screenshot.png)
 
@@ -18,9 +18,9 @@ A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk im
 - Fast scanning — reads in large aligned chunks (about 1 GB in under a second from cache)
 - Structure-aware carving — JPEG (JFIF and EXIF), PNG, GIF, MP4, MOV, HEIC, AVIF, PDF, ZIP, DOCX/XLSX/PPTX, SQLite
 - Each file reports whether it was recovered intact or only partially
-- Results table with filename, type badge, size, sector, and hex offset
-- Detail panel for each recovered file with Open File and Copy Path actions
-- Sidebar filter by file type (Images, Documents, Media, Other)
+- A calm, black-on-white interface: choose a drive, press Scan, watch photos appear
+- Photo thumbnails, filters (Photos, Videos & Audio, Documents), search, and an inspector with Open / Show in Finder
+- Stop a scan at any time and keep what was found so far
 - Recovered files go to a folder you choose (default `~/Documents/Reclaimer`), one subfolder per scan
 - Refuses to save onto the drive being scanned, since that could overwrite what you want back
 
@@ -59,10 +59,15 @@ src/
 │   ├── window.rs        # read-ahead buffer: few large aligned reads
 │   └── formats/         # one carver per format; FORMATS table in mod.rs
 └── ui/
-    ├── mod.rs           # ReclaimerApp state, eframe::App impl, channel polling
-    ├── types.rs         # Palette constants, FoundFile, all shared enums
-    ├── render.rs        # All egui rendering — toolbar, sidebar, table, detail panel
-    └── scan.rs          # start_scan(), background scan thread
+    ├── mod.rs           # app state, frame loop, actions
+    ├── theme.rs         # the design system: colours, type, buttons
+    ├── choose.rs        # screen 1: pick a drive or disk image
+    ├── results.rs       # screen 2: progress, grid, filters, inspector
+    ├── icons.rs         # line icons drawn in code
+    ├── thumbs.rs        # background thumbnail decoding with a capped cache
+    ├── scan.rs          # background scan thread
+    ├── types.rs         # shared types and formatting
+    └── tests.rs         # drives the real UI headlessly (egui_kittest)
 ```
 
 ---
@@ -74,7 +79,8 @@ src/
 | `eframe 0.34` + `egui 0.34` | GUI — immediate-mode, pure Rust, no web tech |
 | `rfd 0.15` | Native OS file picker (NSOpenPanel on macOS) |
 | `open 5` | Opens recovered files with the OS default app |
-| `image 0.25` | Decodes the app icon PNG for the macOS Dock |
+| `image 0.25` | App icon and photo thumbnails (PNG, JPEG, GIF) |
+| Inter (bundled) | Typeface — [SIL Open Font License](assets/fonts/Inter-LICENSE.txt) |
 | `plist`, `libc` (macOS) | Read `diskutil` output; disk ioctls and `authopen` |
 | `windows-sys` (Windows) | Drive geometry and model via `DeviceIoControl` |
 
@@ -91,6 +97,10 @@ cargo run
 ```
 
 No npm, no build scripts, no extra CLI tools. Plain `cargo run`.
+
+To open a disk image straight away: `cargo run -- path/to/disk.img`.
+
+UI screenshots: `RECLAIMER_SHOTS=/some/dir cargo test scan_an_image` drives the app and saves a PNG per step.
 
 ---
 
@@ -113,7 +123,6 @@ Run the tests with `cargo test`. Among other things, they check that `test.img` 
 ## Roadmap
 
 - [ ] NTFS MFT parsing — read deleted file metadata (name, path, dates) from the Master File Table
-- [ ] Filter text input wired to the search box
 - [ ] Ask for administrator rights automatically on Windows and Linux (macOS already does)
 
 ---

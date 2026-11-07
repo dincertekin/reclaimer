@@ -1,94 +1,46 @@
 use std::path::{Path, PathBuf};
-use eframe::egui::Color32;
 use crate::source::drives::Drive;
 
-// Dim-slate palette: comfortable at any hour without being harsh at midnight
-// or washed out under bright daylight. Backgrounds sit at ~8-15% luminosity;
-// text at ~85-90% — contrast ratio ≈ 8:1 across the board.
-pub const BG:           Color32 = Color32::from_rgb( 17,  24,  39); // #111827 gray-900
-pub const PANEL:        Color32 = Color32::from_rgb( 26,  34,  54); // #1A2236
-pub const PANEL_RAISED: Color32 = Color32::from_rgb( 30,  42,  66); // #1E2A42
-pub const SIDEBAR_BG:   Color32 = Color32::from_rgb( 13,  21,  37); // #0D1525
-pub const ACCENT:       Color32 = Color32::from_rgb( 96, 165, 250); // #60A5FA blue-400
-pub const AMBER:        Color32 = Color32::from_rgb(251, 191,  36); // #FBBF24 amber-400
-pub const TEXT:         Color32 = Color32::from_rgb(226, 232, 240); // #E2E8F0 slate-200
-pub const TEXT_SEC:     Color32 = Color32::from_rgb(148, 163, 184); // #94A3B8 slate-400
-pub const TEXT_DIM:     Color32 = Color32::from_rgb( 71,  85, 105); // #475569 slate-600
-pub const GREEN:        Color32 = Color32::from_rgb( 74, 222, 128); // #4ADE80 green-400
-pub const PURPLE:       Color32 = Color32::from_rgb(167, 139, 250); // #A78BFA violet-400
-pub const DANGER:       Color32 = Color32::from_rgb(248, 113, 113); // #F87171 red-400
-pub const BORDER:       Color32 = Color32::from_rgb( 30,  41,  59); // #1E293B slate-800
-pub const BORDER_MID:   Color32 = Color32::from_rgb( 51,  65,  85); // #334155 slate-700
-
+/// A file recovered and saved during a scan.
 #[derive(Clone, Debug)]
 pub struct FoundFile {
-    pub file_type:  String,
-    pub extension:  String,
-    pub sector:     u64,
-    pub offset:     u64,
-    pub size_bytes: usize,
-    pub filename:   String,
-    /// Where the recovered copy was saved.
-    pub path:       PathBuf,
-    pub category:   Category,
+    pub kind:      &'static str, // "JPEG", "MP4", ...
+    pub extension: &'static str,
+    pub offset:    u64,          // where it was found on the source
+    pub size:      u64,
+    pub filename:  String,
+    pub path:      PathBuf,      // where the recovered copy was saved
+    pub category:  Category,
     /// False when the file's end was never found (truncated or fragmented).
-    pub complete:   bool,
+    pub complete:  bool,
 }
 
-#[derive(Clone, Debug, PartialEq)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Category {
-    Image,
-    Document,
+    Photos,
     Media,
+    Documents,
     Other,
 }
 
 impl Category {
+    pub const ALL: [Category; 4] = [Category::Photos, Category::Media, Category::Documents, Category::Other];
+
     pub fn from_ext(ext: &str) -> Self {
-        match ext.to_lowercase().as_str() {
-            "jpg" | "jpeg" | "png" | "gif" | "bmp" | "tiff" | "webp" | "heic" | "avif" | "raw" | "cr2"
-            | "nef" | "arw" | "dng" => Category::Image,
-            "mp4" | "mov" | "avi" | "mkv" | "mp3" | "wav" | "aac" | "flac" | "ogg" | "m4a"
-            | "m4v" | "wma" | "wmv" | "3gp" => Category::Media,
-            "pdf" | "doc" | "docx" | "xls" | "xlsx" | "ppt" | "pptx" | "txt" | "rtf" | "odt"
-            | "csv" | "pages" | "numbers" => Category::Document,
+        match ext {
+            "jpg" | "png" | "gif" | "heic" | "avif" => Category::Photos,
+            "mp4" | "mov" | "m4a" | "3gp" => Category::Media,
+            "pdf" | "docx" | "xlsx" | "pptx" => Category::Documents,
             _ => Category::Other,
         }
     }
 
-    pub fn color(&self) -> Color32 {
+    pub fn label(self) -> &'static str {
         match self {
-            Category::Image    => AMBER,
-            Category::Document => PURPLE,
-            Category::Media    => GREEN,
-            Category::Other    => TEXT_SEC,
-        }
-    }
-}
-
-#[derive(Clone, PartialEq, Debug)]
-pub enum Filter { All, Images, Documents, Media, Other }
-
-#[derive(Clone, PartialEq, Debug)]
-pub enum Phase { Idle, Ready, Scanning, Done }
-
-pub enum ScanMsg {
-    Progress { scanned: u64, total: u64, found: u32 },
-    Found(FoundFile),
-    Done,
-    Error(String),
-}
-
-#[derive(Clone, PartialEq)]
-pub enum DotState { Idle, Scanning, Done, Error }
-
-impl DotState {
-    pub fn color(&self) -> Color32 {
-        match self {
-            DotState::Idle     => TEXT_DIM,
-            DotState::Scanning => ACCENT,
-            DotState::Done     => GREEN,
-            DotState::Error    => DANGER,
+            Category::Photos    => "Photos",
+            Category::Media     => "Videos & Audio",
+            Category::Documents => "Documents",
+            Category::Other     => "Other",
         }
     }
 }
@@ -109,22 +61,112 @@ impl Source {
     }
 }
 
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Phase {
+    Choose,
+    Scanning,
+    Done,
+}
+
+pub enum ScanMsg {
+    /// The scan opened its source and created its output folder.
+    Started { folder: PathBuf },
+    Progress { done: u64, total: u64 },
+    Found(FoundFile),
+    Done,
+    Error(String),
+}
+
 /// Default home for recovered files: ~/Documents/Reclaimer.
 pub fn default_output_dir() -> PathBuf {
     std::env::home_dir()
         .map(|home| home.join("Documents").join("Reclaimer"))
-        .unwrap_or_else(|| Path::new("Recovered").to_path_buf())
+        .unwrap_or_else(|| PathBuf::from("Recovered"))
 }
 
-pub enum ToolbarAction {
-    OpenImage,
-    ListDrives,
-    ChooseDrive(usize),
+// ── Formatting ─────────────────────────────────────────────────────────────
+
+/// Sizes the way Finder shows them: decimal units.
+pub fn fmt_size(bytes: u64) -> String {
+    let b = bytes as f64;
+    match bytes {
+        0..1_000                 => format!("{bytes} bytes"),
+        1_000..1_000_000         => format!("{:.0} KB", b / 1e3),
+        1_000_000..1_000_000_000 => format!("{:.1} MB", b / 1e6),
+        1_000_000_000..1_000_000_000_000 => format!("{:.1} GB", b / 1e9),
+        _                        => format!("{:.1} TB", b / 1e12),
+    }
 }
 
-pub enum ResultAction {
-    Select(usize),
-    Open(usize),
-    CopyPath(usize),
-    StartScan,
+/// 1284 → "1,284"
+pub fn fmt_count(n: usize) -> String {
+    let digits = n.to_string();
+    let mut out = String::new();
+    for (i, c) in digits.chars().enumerate() {
+        if i > 0 && (digits.len() - i).is_multiple_of(3) {
+            out.push(',');
+        }
+        out.push(c);
+    }
+    out
+}
+
+pub fn plural(n: usize, one: &str, many: &str) -> String {
+    format!("{} {}", fmt_count(n), if n == 1 { one } else { many })
+}
+
+/// "about 3 min left"
+pub fn fmt_remaining(seconds: f64) -> String {
+    let minutes = (seconds / 60.0).round() as u64;
+    match minutes {
+        0     => "less than a minute left".into(),
+        1..60 => format!("about {minutes} min left"),
+        _     => format!("about {} hr {} min left", minutes / 60, minutes % 60),
+    }
+}
+
+/// /Users/me/Documents → ~/Documents
+pub fn pretty_path(path: &Path) -> String {
+    match std::env::home_dir().and_then(|home| path.strip_prefix(home).ok().map(Path::to_path_buf)) {
+        Some(rest) if rest.as_os_str().is_empty() => "~".into(),
+        Some(rest) => format!("~{}{}", std::path::MAIN_SEPARATOR, rest.display()),
+        None => path.display().to_string(),
+    }
+}
+
+/// What the platform calls its file manager.
+pub const FILE_MANAGER: &str = if cfg!(target_os = "macos") {
+    "Finder"
+} else if cfg!(windows) {
+    "Explorer"
+} else {
+    "Files"
+};
+
+/// Shows a file selected in the file manager.
+pub fn reveal(path: &Path) {
+    #[cfg(target_os = "macos")]
+    let _ = std::process::Command::new("open").arg("-R").arg(path).spawn();
+    #[cfg(windows)]
+    let _ = std::process::Command::new("explorer").arg(format!("/select,{}", path.display())).spawn();
+    #[cfg(not(any(target_os = "macos", windows)))]
+    let _ = open::that(path.parent().unwrap_or(path));
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn formats_like_finder() {
+        assert_eq!(fmt_size(512), "512 bytes");
+        assert_eq!(fmt_size(143_731), "144 KB");
+        assert_eq!(fmt_size(6_333_041), "6.3 MB");
+        assert_eq!(fmt_count(1284), "1,284");
+        assert_eq!(fmt_count(999), "999");
+        assert_eq!(fmt_count(1_000_000), "1,000,000");
+        assert_eq!(plural(1, "file", "files"), "1 file");
+        assert_eq!(fmt_remaining(3.0 * 60.0), "about 3 min left");
+        assert_eq!(fmt_remaining(65.0 * 60.0), "about 1 hr 5 min left");
+    }
 }

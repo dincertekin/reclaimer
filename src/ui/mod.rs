@@ -1,109 +1,103 @@
+//! Two screens, one thing at a time:
+//!   Choose  — pick a drive or disk image, press Scan.
+//!   Results — watch files appear while scanning, then browse them.
+
 use std::io;
 use std::path::PathBuf;
 use std::sync::atomic::AtomicBool;
 use std::sync::{mpsc, Arc};
-use eframe::egui::{self, Color32, Stroke, Vec2};
+use std::time::{Duration, Instant};
 
-mod types;
-mod render;
+use eframe::egui::{self, Color32, Sense};
+
+mod choose;
+mod icons;
+mod results;
 mod scan;
+mod theme;
+mod thumbs;
+mod types;
+#[cfg(test)]
+mod tests;
 
-use types::*;
 use crate::source::drives::{self, Drive};
+use thumbs::Thumbnails;
+use types::*;
 
 const OUTPUT_DIR_KEY: &str = "output_dir";
+/// Drives are re-listed this often while choosing, so a card plugged in
+/// shows up by itself.
+const DRIVE_REFRESH: Duration = Duration::from_secs(3);
 
 pub struct ReclaimerApp {
-    // pub(crate) makes these fields accessible to render.rs and scan.rs,
-    // which add their own impl blocks to this struct in sibling modules.
-    pub(crate) source:          Option<Source>,
-    /// Drives found by the last listing; `None` until listed.
-    pub(crate) drives:          Option<io::Result<Vec<Drive>>>,
-    pub(crate) drives_rx:       Option<mpsc::Receiver<io::Result<Vec<Drive>>>>,
-    /// Parent folder; each scan saves into its own subfolder of it.
-    pub(crate) output_dir:      PathBuf,
-    pub(crate) phase:           Phase,
-    pub(crate) found_files:     Vec<FoundFile>,
-    pub(crate) selected_idx:    Option<usize>,
-    pub(crate) active_filter:   Filter,
-    pub(crate) filter_text:     String,
-    pub(crate) status_text:     String,
-    pub(crate) dot_state:       DotState,
-    pub(crate) scanned_sectors: u64,
-    pub(crate) total_sectors:   u64,
-    pub(crate) found_count:     u32,
-    pub(crate) scan_rx:         Option<mpsc::Receiver<ScanMsg>>,
-    pub(crate) scan_cancel:     Option<Arc<AtomicBool>>,
-    pub(crate) file_rx:         Option<mpsc::Receiver<Option<PathBuf>>>,
-    pub(crate) folder_rx:       Option<mpsc::Receiver<Option<PathBuf>>>,
+    // Choosing
+    source:        Option<Source>,
+    drives:        Vec<Drive>,
+    drives_rx:     Option<mpsc::Receiver<io::Result<Vec<Drive>>>>,
+    drives_listed: Option<Instant>,
+    output_dir:    PathBuf,
+    error:         Option<String>,
+
+    // Scanning
+    phase:         Phase,
+    found:         Vec<FoundFile>,
+    progress:      (u64, u64), // bytes done, total
+    started:       Instant,
+    stopped:       bool,
+    scan_folder:   Option<PathBuf>,
+    scan_rx:       Option<mpsc::Receiver<ScanMsg>>,
+    scan_cancel:   Option<Arc<AtomicBool>>,
+
+    // Browsing results
+    filter:        Option<Category>, // None = all
+    search:        String,
+    selected:      Option<usize>,
+    thumbs:        Thumbnails,
+
+    // Native dialogs run on their own threads so the window stays live.
+    image_rx:      Option<mpsc::Receiver<Option<PathBuf>>>,
+    folder_rx:     Option<mpsc::Receiver<Option<PathBuf>>>,
 }
 
 impl ReclaimerApp {
-    pub fn new(cc: &eframe::CreationContext<'_>) -> Self {
-        setup_visuals(&cc.egui_ctx);
+    /// `image`: a disk image to start with, e.g. from the command line.
+    pub fn new(cc: &eframe::CreationContext<'_>, image: Option<PathBuf>) -> Self {
+        theme::install(&cc.egui_ctx);
         let output_dir = cc.storage
             .and_then(|s| eframe::get_value(s, OUTPUT_DIR_KEY))
             .unwrap_or_else(default_output_dir);
         Self {
-            source:          None,
-            drives:          None,
-            drives_rx:       None,
+            source:        image.map(Source::Image),
+            drives:        Vec::new(),
+            drives_rx:     None,
+            drives_listed: None,
             output_dir,
-            phase:           Phase::Idle,
-            found_files:     Vec::new(),
-            selected_idx:    None,
-            active_filter:   Filter::All,
-            filter_text:     String::new(),
-            status_text:     "Idle \u{2014} load a disk image to begin".into(),
-            dot_state:       DotState::Idle,
-            scanned_sectors: 0,
-            total_sectors:   0,
-            found_count:     0,
-            scan_rx:         None,
-            scan_cancel:     None,
-            file_rx:         None,
-            folder_rx:       None,
+            error:         None,
+            phase:         Phase::Choose,
+            found:         Vec::new(),
+            progress:      (0, 0),
+            started:       Instant::now(),
+            stopped:       false,
+            scan_folder:   None,
+            scan_rx:       None,
+            scan_cancel:   None,
+            filter:        None,
+            search:        String::new(),
+            selected:      None,
+            thumbs:        Thumbnails::new(&cc.egui_ctx),
+            image_rx:      None,
+            folder_rx:     None,
         }
     }
 
-    pub(crate) fn count(&self, filter: &Filter) -> usize {
-        self.found_files.iter().filter(|file| match filter {
-            Filter::All       => true,
-            Filter::Images    => file.category == Category::Image,
-            Filter::Documents => file.category == Category::Document,
-            Filter::Media     => file.category == Category::Media,
-            Filter::Other     => file.category == Category::Other,
-        }).count()
-    }
+    // ── Actions ────────────────────────────────────────────────────────────
 
-    pub(crate) fn visible_files(&self) -> Vec<(usize, &FoundFile)> {
-        let query = self.filter_text.to_lowercase();
-        self.found_files
-            .iter()
-            .enumerate()
-            .filter(|(_, file)| {
-                let matches_category = match self.active_filter {
-                    Filter::All       => true,
-                    Filter::Images    => file.category == Category::Image,
-                    Filter::Documents => file.category == Category::Document,
-                    Filter::Media     => file.category == Category::Media,
-                    Filter::Other     => file.category == Category::Other,
-                };
-                if !matches_category { return false; }
-                if !query.is_empty() {
-                    return file.filename.to_lowercase().contains(&query)
-                        || file.extension.to_lowercase().contains(&query);
-                }
-                true
-            })
-            .collect()
-    }
-
-    fn open_file_dialog(&mut self) {
+    fn choose_image(&mut self) {
         let (tx, rx) = mpsc::channel();
-        self.file_rx = Some(rx);
+        self.image_rx = Some(rx);
         std::thread::spawn(move || {
             let path = rfd::FileDialog::new()
+                .set_title("Choose a Disk Image")
                 .add_filter("Disk Images", &["img", "dd", "raw", "iso", "bin", "dmg"])
                 .add_filter("All Files", &["*"])
                 .pick_file();
@@ -116,7 +110,11 @@ impl ReclaimerApp {
         self.folder_rx = Some(rx);
         let start = self.output_dir.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(rfd::FileDialog::new().set_directory(start).pick_folder());
+            let folder = rfd::FileDialog::new()
+                .set_title("Save Recovered Files To")
+                .set_directory(start)
+                .pick_folder();
+            let _ = tx.send(folder);
         });
     }
 
@@ -135,106 +133,129 @@ impl ReclaimerApp {
     }
 
     fn set_source(&mut self, source: Source) {
+        self.source = Some(source);
+        self.error = None;
+    }
+
+    /// Back to the Choose screen, keeping the chosen source.
+    fn new_scan(&mut self) {
         self.cancel_scan();
-        self.status_text  = format!("{} \u{2014} ready to scan", source.name());
-        self.source       = Some(source);
-        self.found_files  = Vec::new();
-        self.selected_idx = None;
-        self.phase        = Phase::Ready;
-        self.dot_state    = DotState::Idle;
+        self.phase = Phase::Choose;
+        self.found.clear();
+        self.thumbs.clear();
+        self.selected = None;
+        self.filter = None;
+        self.search.clear();
+        self.error = None;
+        self.drives_listed = None; // refresh now
     }
 
-    fn load_image(&mut self, path: PathBuf) {
-        self.set_source(Source::Image(path));
-    }
-
-    fn open_result(&self, idx: usize) {
-        if let Some(file) = self.found_files.get(idx) {
+    fn open_file(&self, idx: usize) {
+        if let Some(file) = self.found.get(idx) {
             let _ = open::that(&file.path);
         }
     }
 
-    fn poll_channels(&mut self, ctx: &egui::Context) {
-        // egui accumulates dropped files in input().raw.dropped_files each frame.
-        let dropped = ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone()));
-        if let Some(path) = dropped {
-            self.load_image(path);
+    // ── Queries ────────────────────────────────────────────────────────────
+
+    fn count(&self, category: Category) -> usize {
+        self.found.iter().filter(|f| f.category == category).count()
+    }
+
+    /// Indices of the files that pass the filter and search.
+    fn visible_files(&self) -> Vec<usize> {
+        let query = self.search.trim().to_lowercase();
+        self.found
+            .iter()
+            .enumerate()
+            .filter(|(_, f)| self.filter.is_none_or(|c| f.category == c))
+            .filter(|(_, f)| {
+                query.is_empty()
+                    || f.filename.to_lowercase().contains(&query)
+                    || f.kind.to_lowercase().contains(&query)
+            })
+            .map(|(i, _)| i)
+            .collect()
+    }
+
+    // ── Background results ─────────────────────────────────────────────────
+
+    fn poll(&mut self, ctx: &egui::Context) {
+        self.thumbs.poll(ctx);
+
+        if self.phase == Phase::Choose {
+            let dropped = ctx.input(|i| i.raw.dropped_files.first().and_then(|f| f.path.clone()));
+            if let Some(path) = dropped {
+                self.set_source(Source::Image(path));
+            }
+            let stale = self.drives_listed.is_none_or(|t| t.elapsed() >= DRIVE_REFRESH);
+            if stale && self.drives_rx.is_none() {
+                self.list_drives(ctx);
+            }
+            ctx.request_repaint_after(DRIVE_REFRESH);
         }
 
-        if let Some(ref rx) = self.file_rx
-            && let Ok(maybe_path) = rx.try_recv()
+        if let Some(rx) = &self.image_rx
+            && let Ok(choice) = rx.try_recv()
         {
-            self.file_rx = None;
-            if let Some(path) = maybe_path {
-                self.load_image(path);
+            self.image_rx = None;
+            if let Some(path) = choice {
+                self.set_source(Source::Image(path));
             }
         }
 
-        if let Some(ref rx) = self.folder_rx
-            && let Ok(maybe_folder) = rx.try_recv()
+        if let Some(rx) = &self.folder_rx
+            && let Ok(choice) = rx.try_recv()
         {
             self.folder_rx = None;
-            if let Some(folder) = maybe_folder {
+            if let Some(folder) = choice {
                 self.output_dir = folder;
+                self.error = None;
             }
         }
 
-        if let Some(ref rx) = self.drives_rx
+        if let Some(rx) = &self.drives_rx
             && let Ok(result) = rx.try_recv()
         {
             self.drives_rx = None;
-            self.drives = Some(result);
-        }
-
-        let mut msgs = Vec::new();
-        if let Some(ref rx) = self.scan_rx {
-            while let Ok(msg) = rx.try_recv() {
-                msgs.push(msg);
+            self.drives_listed = Some(Instant::now());
+            // A failed listing keeps the last good one: images still work.
+            if let Ok(list) = result {
+                // Keep the chosen drive in sync; forget it if it was unplugged.
+                if let Some(Source::Drive(chosen)) = &self.source {
+                    let current = list.iter().find(|d| d.path == chosen.path).cloned();
+                    self.source = current.map(Source::Drive);
+                }
+                self.drives = list;
             }
         }
 
-        for msg in msgs {
+        let messages: Vec<ScanMsg> = match &self.scan_rx {
+            Some(rx) => rx.try_iter().collect(),
+            None => Vec::new(),
+        };
+        for msg in messages {
             match msg {
-                ScanMsg::Progress { scanned, total, found } => {
-                    self.scanned_sectors = scanned;
-                    self.total_sectors   = total;
-                    self.found_count     = found;
-                    if total > 0 {
-                        self.status_text = format!(
-                            "Scanning sector {} / {}  \u{2014}  {} found",
-                            render::fmt_num(scanned),
-                            render::fmt_num(total),
-                            found
-                        );
-                    }
-                }
-                ScanMsg::Found(file) => {
-                    self.found_files.push(file);
-                }
+                ScanMsg::Started { folder } => self.scan_folder = Some(folder),
+                ScanMsg::Progress { done, total } => self.progress = (done, total),
+                ScanMsg::Found(file) => self.found.push(file),
                 ScanMsg::Done => {
-                    self.phase       = Phase::Done;
-                    self.scan_rx     = None;
+                    self.phase = Phase::Done;
+                    self.scan_rx = None;
                     self.scan_cancel = None;
-                    let count      = self.found_files.len();
-                    self.status_text = if count == 0 {
-                        "Scan complete \u{2014} no artifacts found".into()
-                    } else {
-                        format!("Scan complete \u{2014} {} artifact{} recovered", count, if count == 1 { "" } else { "s" })
-                    };
-                    self.dot_state = DotState::Done;
                 }
-                ScanMsg::Error(e) => {
-                    self.phase       = Phase::Done;
-                    self.scan_rx     = None;
+                ScanMsg::Error(message) => {
+                    self.scan_rx = None;
                     self.scan_cancel = None;
-                    self.status_text = format!("Error: {e}");
-                    self.dot_state   = DotState::Error;
+                    self.error = Some(message);
+                    // Nothing to show? Go back so the problem can be fixed.
+                    self.phase = if self.found.is_empty() { Phase::Choose } else { Phase::Done };
                 }
             }
         }
 
         if self.phase == Phase::Scanning {
-            ctx.request_repaint();
+            ctx.request_repaint_after(Duration::from_millis(250));
         }
     }
 }
@@ -245,112 +266,38 @@ impl eframe::App for ReclaimerApp {
     }
 
     fn ui(&mut self, ui: &mut egui::Ui, _frame: &mut eframe::Frame) {
-        ui.ctx().send_viewport_cmd(egui::ViewportCommand::SetTheme(egui::SystemTheme::Dark));
+        let ctx = ui.ctx().clone();
+        self.poll(&ctx);
 
-        self.poll_channels(ui.ctx());
+        if ctx.input(|i| i.key_pressed(egui::Key::Escape)) {
+            self.selected = None;
+        }
 
-        // All draw_* methods take &self (immutable). Actions are collected as
-        // return values and applied to &mut self after all rendering is done.
-        let toolbar_action = egui::Panel::top("toolbar")
-            .exact_size(48.0)
-            .frame(egui::Frame::NONE.fill(SIDEBAR_BG))
-            .show_inside(ui, |ui| self.draw_toolbar(ui))
-            .inner;
+        match self.phase {
+            Phase::Choose => self.choose_screen(ui),
+            Phase::Scanning | Phase::Done => self.results_screen(ui),
+        }
 
-        let change_folder = egui::Panel::bottom("statusbar")
-            .exact_size(34.0)
-            .frame(egui::Frame::NONE.fill(SIDEBAR_BG))
-            .show_inside(ui, |ui| self.draw_statusbar(ui))
-            .inner;
+        let window = ctx.content_rect();
 
-        let (filter_change, result_action) = egui::CentralPanel::default()
-            .frame(egui::Frame::NONE.fill(BG))
-            .show_inside(ui, |ui| self.draw_workspace(ui))
-            .inner;
+        // The transparent title bar strip still moves the window.
+        if theme::TITLEBAR > 0.0 {
+            let strip = egui::Rect::from_min_size(window.min, egui::vec2(window.width(), theme::TITLEBAR));
+            if ui.interact(strip, egui::Id::new("titlebar"), Sense::drag()).drag_started() {
+                ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
+            }
+        }
 
-        // Drag-over overlay — rendered last so it sits on top of all other panels.
-        if ui.ctx().input(|i| !i.raw.hovered_files.is_empty()) {
-            let window_rect = ui.max_rect();
-            ui.painter().rect_filled(window_rect, 0.0, Color32::from_rgba_unmultiplied(96, 165, 250, 18));
-            ui.painter().rect_stroke(
-                window_rect.shrink(3.0),
-                egui::CornerRadius::ZERO,
-                Stroke::new(2.0, ACCENT),
+        if self.phase == Phase::Choose && ctx.input(|i| !i.raw.hovered_files.is_empty()) {
+            let painter = ctx.layer_painter(egui::LayerId::new(egui::Order::Foreground, egui::Id::new("drop")));
+            painter.rect_filled(window, 0.0, Color32::from_white_alpha(235));
+            painter.rect_stroke(
+                window.shrink(16.0),
+                egui::CornerRadius::same(theme::RADIUS + 4),
+                egui::Stroke::new(2.0, theme::BLACK),
                 egui::StrokeKind::Inside,
             );
-            ui.painter().text(
-                window_rect.center() + Vec2::new(0.0, 40.0),
-                egui::Align2::CENTER_CENTER,
-                "Drop to load image",
-                egui::FontId::proportional(20.0),
-                Color32::from_rgba_unmultiplied(96, 165, 250, 220),
-            );
-        }
-
-        match toolbar_action {
-            Some(ToolbarAction::OpenImage)          => self.open_file_dialog(),
-            Some(ToolbarAction::ListDrives)         => self.list_drives(ui.ctx()),
-            Some(ToolbarAction::ChooseDrive(index)) => {
-                let drive = match &self.drives {
-                    Some(Ok(list)) => list.get(index).cloned(),
-                    _ => None,
-                };
-                if let Some(drive) = drive { self.set_source(Source::Drive(drive)); }
-            }
-            None => {}
-        }
-        if change_folder { self.choose_output_folder(); }
-        if let Some(new_filter) = filter_change {
-            self.active_filter = new_filter;
-            self.selected_idx  = None;
-        }
-        if let Some(action) = result_action {
-            match action {
-                ResultAction::Select(idx) => {
-                    // Second click on an already-selected row deselects it.
-                    self.selected_idx = if self.selected_idx == Some(idx) { None } else { Some(idx) };
-                }
-                ResultAction::StartScan      => self.start_scan(ui.ctx().clone()),
-                ResultAction::Open(idx)      => self.open_result(idx),
-                ResultAction::CopyPath(idx)  => {
-                    if let Some(file) = self.found_files.get(idx) {
-                        ui.ctx().copy_text(file.path.display().to_string());
-                    }
-                }
-            }
+            painter.text(window.center(), egui::Align2::CENTER_CENTER, "Drop to scan this disk image", theme::semibold(20.0), theme::BLACK);
         }
     }
-}
-
-fn setup_visuals(ctx: &egui::Context) {
-    let mut style = (*ctx.global_style()).clone();
-
-    style.visuals.dark_mode  = true;
-    style.visuals.window_fill = BG;
-    style.visuals.panel_fill  = PANEL;
-
-    style.visuals.widgets.noninteractive.bg_fill   = PANEL;
-    style.visuals.widgets.noninteractive.fg_stroke = Stroke::new(1.0, TEXT_SEC);
-    style.visuals.widgets.noninteractive.bg_stroke = Stroke::new(1.0, BORDER);
-
-    style.visuals.widgets.inactive.bg_fill   = PANEL_RAISED;
-    style.visuals.widgets.inactive.fg_stroke = Stroke::new(1.0, TEXT_SEC);
-    style.visuals.widgets.inactive.bg_stroke = Stroke::new(1.0, BORDER_MID);
-
-    style.visuals.widgets.hovered.bg_fill   = Color32::from_rgb(37, 52, 82);
-    style.visuals.widgets.hovered.fg_stroke = Stroke::new(1.0, TEXT);
-    style.visuals.widgets.hovered.bg_stroke = Stroke::new(1.0, BORDER_MID);
-
-    style.visuals.widgets.active.bg_fill   = Color32::from_rgba_unmultiplied(96, 165, 250, 30);
-    style.visuals.widgets.active.fg_stroke = Stroke::new(1.0, ACCENT);
-    style.visuals.widgets.active.bg_stroke = Stroke::new(1.0, ACCENT);
-
-    style.visuals.selection.bg_fill = Color32::from_rgba_unmultiplied(96, 165, 250, 30);
-    style.visuals.selection.stroke  = Stroke::new(1.0, ACCENT);
-
-    style.visuals.window_shadow   = egui::Shadow::NONE;
-    style.spacing.item_spacing    = Vec2::new(6.0, 4.0);
-    style.spacing.button_padding  = Vec2::new(16.0, 10.0);
-
-    ctx.set_global_style(style);
 }
