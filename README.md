@@ -3,7 +3,6 @@
 </p>
 
 <p align="center">
-  <a href="https://github.com/dincertekin/reclaimer/stargazers"><img src="https://img.shields.io/github/stars/dincertekin/reclaimer?style=flat&logo=github&color=111827" alt="GitHub stars"></a>
   <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-111827" alt="MIT license"></a>
   <img src="https://img.shields.io/badge/macOS%20·%20Windows%20·%20Linux-111827" alt="macOS, Windows and Linux">
   <img src="https://img.shields.io/badge/built%20with-Rust-111827?logo=rust" alt="Built with Rust">
@@ -139,7 +138,8 @@ with its output. Platform-specific notes are in
 
 Bug reports, ideas and code are all welcome. Start with
 [CONTRIBUTING.md](CONTRIBUTING.md); [Developing Reclaimer](docs/development.md)
-covers building, the project structure and the tests.
+covers building, the project structure and the tests. Found a security
+issue? Please report it [privately](SECURITY.md).
 
 Built with [Rust](https://www.rust-lang.org) and [egui](https://github.com/emilk/egui).
 
@@ -155,15 +155,6 @@ Reclaimer is free, and it stays free. If it got your files back, you can:
 - **Tell a friend** who just lost their photos.
 
 Thank you!
-
-## Star history
-
-<a href="https://star-history.com/#dincertekin/reclaimer&Date">
-  <picture>
-    <source media="(prefers-color-scheme: dark)" srcset="https://api.star-history.com/svg?repos=dincertekin/reclaimer&type=Date&theme=dark">
-    <img alt="Star history" src="https://api.star-history.com/svg?repos=dincertekin/reclaimer&type=Date" width="600">
-  </picture>
-</a>
 
 ## License
 
