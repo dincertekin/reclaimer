@@ -20,7 +20,14 @@ mod types;
 #[cfg(test)]
 mod tests;
 
+use crate::phone::iphone::{self, Backup};
 use crate::source::drives::{self, Drive};
+
+/// What the background listing found: drives, and iPhone backups.
+struct Listing {
+    drives:  io::Result<Vec<Drive>>,
+    backups: io::Result<Vec<Backup>>,
+}
 use thumbs::Thumbnails;
 use types::*;
 
@@ -33,7 +40,10 @@ pub struct ReclaimerApp {
     // Choosing
     source:        Option<Source>,
     drives:        Vec<Drive>,
-    drives_rx:     Option<mpsc::Receiver<io::Result<Vec<Drive>>>>,
+    backups:       Vec<Backup>,
+    /// macOS hides iPhone backups until the app has Full Disk Access.
+    backups_locked: bool,
+    drives_rx:     Option<mpsc::Receiver<Listing>>,
     drives_listed: Option<Instant>,
     output_dir:    PathBuf,
     error:         Option<String>,
@@ -50,7 +60,7 @@ pub struct ReclaimerApp {
     scan_cancel:   Option<Arc<AtomicBool>>,
 
     // Browsing results
-    filter:        Option<Category>, // None = all
+    filter:        Filter,
     search:        String,
     selected:      Option<usize>,
     thumbs:        Thumbnails,
@@ -70,6 +80,8 @@ impl ReclaimerApp {
         Self {
             source:        image.map(Source::Image),
             drives:        Vec::new(),
+            backups:       Vec::new(),
+            backups_locked: false,
             drives_rx:     None,
             drives_listed: None,
             output_dir,
@@ -83,7 +95,7 @@ impl ReclaimerApp {
             scan_folder:   None,
             scan_rx:       None,
             scan_cancel:   None,
-            filter:        None,
+            filter:        Filter::All,
             search:        String::new(),
             selected:      None,
             thumbs:        Thumbnails::new(&cc.egui_ctx),
@@ -121,6 +133,7 @@ impl ReclaimerApp {
     }
 
     /// Listing drives shells out to the OS, so it runs off the UI thread.
+    /// iPhone backups are listed alongside.
     fn list_drives(&mut self, ctx: &egui::Context) {
         if self.drives_rx.is_some() {
             return;
@@ -129,7 +142,8 @@ impl ReclaimerApp {
         self.drives_rx = Some(rx);
         let ctx = ctx.clone();
         std::thread::spawn(move || {
-            let _ = tx.send(drives::list());
+            let backups = iphone::find_backups(&iphone::backup_folders());
+            let _ = tx.send(Listing { drives: drives::list(), backups });
             ctx.request_repaint();
         });
     }
@@ -146,7 +160,7 @@ impl ReclaimerApp {
         self.found.clear();
         self.thumbs.clear();
         self.selected = None;
-        self.filter = None;
+        self.filter = Filter::All;
         self.search.clear();
         self.error = None;
         self.drives_listed = None; // refresh now
@@ -160,8 +174,8 @@ impl ReclaimerApp {
 
     // ── Queries ────────────────────────────────────────────────────────────
 
-    fn count(&self, category: Category) -> usize {
-        self.found.iter().filter(|f| f.category == category).count()
+    fn count(&self, filter: Filter) -> usize {
+        self.found.iter().filter(|f| filter.includes(f)).count()
     }
 
     /// Indices of the files that pass the filter and search.
@@ -170,7 +184,7 @@ impl ReclaimerApp {
         self.found
             .iter()
             .enumerate()
-            .filter(|(_, f)| self.filter.is_none_or(|c| f.category == c))
+            .filter(|(_, f)| self.filter.includes(f))
             .filter(|(_, f)| {
                 query.is_empty()
                     || f.filename.to_lowercase().contains(&query)
@@ -218,18 +232,25 @@ impl ReclaimerApp {
         }
 
         if let Some(rx) = &self.drives_rx
-            && let Ok(result) = rx.try_recv()
+            && let Ok(listing) = rx.try_recv()
         {
             self.drives_rx = None;
             self.drives_listed = Some(Instant::now());
             // A failed listing keeps the last good one: images still work.
-            if let Ok(list) = result {
+            if let Ok(list) = listing.drives {
                 // Keep the chosen drive in sync; forget it if it was unplugged.
                 if let Some(Source::Drive(chosen)) = &self.source {
                     let current = list.iter().find(|d| d.path == chosen.path).cloned();
                     self.source = current.map(Source::Drive);
                 }
                 self.drives = list;
+            }
+            match listing.backups {
+                Ok(list) => {
+                    self.backups = list;
+                    self.backups_locked = false;
+                }
+                Err(e) => self.backups_locked = e.kind() == io::ErrorKind::PermissionDenied,
             }
         }
 

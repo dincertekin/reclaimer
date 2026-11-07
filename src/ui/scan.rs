@@ -7,8 +7,9 @@ use super::ReclaimerApp;
 use std::time::Instant;
 use std::collections::HashSet;
 use std::io::Read;
-use super::types::{extension_of, kind_name, safe_name, Category, FoundFile, Phase, ScanMsg, Source};
+use super::types::{extension_of, kind_name, safe_name, Category, Filter, FoundFile, Phase, ScanMsg, Source};
 use crate::fs::{self, DeletedFile};
+use crate::phone::iphone::{self, Backup};
 use crate::scanner::{self, ScanEvent};
 use crate::source::{drives, BlockSource, FileSource};
 
@@ -22,7 +23,7 @@ impl ReclaimerApp {
         self.found.clear();
         self.thumbs.clear();
         self.selected = None;
-        self.filter = None;
+        self.filter = Filter::All;
         self.search.clear();
         self.progress = (0, 0);
         self.started = Instant::now();
@@ -85,8 +86,9 @@ fn run_scan(
     }
 
     let mut reader = match source {
-        Source::Image(path)  => FileSource::image(path)?,
-        Source::Drive(drive) => drives::open(drive)?,
+        Source::Image(path)   => FileSource::image(path)?,
+        Source::Drive(drive)  => drives::open(drive)?,
+        Source::Backup(backup) => return scan_backup(backup, output_dir, cancel, tx, ctx),
     };
     // A second handle for saving, as the scan holds the first. Cloning
     // (rather than reopening) means one permission prompt, not two.
@@ -137,7 +139,7 @@ fn run_scan(
                     let _ = tx.send(ScanMsg::Found(FoundFile {
                         kind:      item.kind.name.to_string(),
                         extension: item.kind.ext.to_string(),
-                        offset:    item.offset,
+                        offset:    Some(item.offset),
                         size:      item.len,
                         filename,
                         path,
@@ -145,6 +147,7 @@ fn run_scan(
                         complete:  item.complete,
                         folder:    None,
                         modified:  None,
+                        recently_deleted: false,
                     }));
                     ctx.request_repaint();
                 }
@@ -176,24 +179,79 @@ fn save_named(src: &mut FileSource, file: &DeletedFile, scan_folder: &Path) -> i
     let path = unique_file(&dir, &safe_name(&file.name));
     crate::source::save(src, &file.pieces, &path)?;
 
-    // A "photo.jpg" that no longer starts like a JPEG was overwritten.
     let extension = extension_of(&file.name);
-    let mut header = [0u8; 32];
-    let n = std::fs::File::open(&path)?.read(&mut header)?;
-    let looks_right = scanner::looks_like(&extension, &header[..n]) != Some(false);
+    let looks_right = content_matches_name(&path, &extension)?;
 
     Ok(FoundFile {
         kind:     kind_name(&extension),
         category: Category::from_ext(&extension),
-        offset:   file.start().unwrap_or(0),
+        offset:   file.start(),
         size:     file.size,
         filename: path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
         path,
         complete: file.intact && looks_right,
         folder:   Some(file.folder.clone()),
         modified: file.modified.map(|m| m.local()),
+        recently_deleted: false,
         extension,
     })
+}
+
+/// Copies the photos and attachments out of an iPhone backup.
+fn scan_backup(
+    backup:     &Backup,
+    output_dir: &Path,
+    cancel:     &AtomicBool,
+    tx:         &mpsc::Sender<ScanMsg>,
+    ctx:        &egui::Context,
+) -> io::Result<()> {
+    let _ = tx.send(ScanMsg::Stage("Reading the backup\u{2026}"));
+    ctx.request_repaint();
+    let files = iphone::files(backup)?;
+
+    let folder = unique_folder(output_dir, &backup.device);
+    std::fs::create_dir_all(&folder)?;
+    let _ = tx.send(ScanMsg::Started { folder: folder.clone() });
+    let total = files.iter().map(|f| f.size).sum::<u64>().max(1);
+    let mut done = 0;
+
+    for file in &files {
+        if cancel.load(Ordering::Relaxed) {
+            return Ok(());
+        }
+        let dir = file.folder.split('/').filter(|p| !p.is_empty()).fold(folder.clone(), |d, p| d.join(safe_name(p)));
+        std::fs::create_dir_all(&dir)?;
+        let path = unique_file(&dir, &safe_name(&file.name));
+        // An interrupted backup can lack some files: skip those, keep going.
+        if std::fs::copy(&file.stored, &path).is_err() {
+            continue;
+        }
+        let extension = extension_of(&file.name);
+        let _ = tx.send(ScanMsg::Found(FoundFile {
+            kind:      kind_name(&extension),
+            category:  Category::from_ext(&extension),
+            offset:    None,
+            size:      file.size,
+            filename:  path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
+            complete:  content_matches_name(&path, &extension)?,
+            path,
+            folder:    Some(file.folder.clone()),
+            modified:  file.modified.map(|m| m.local()),
+            recently_deleted: file.recently_deleted,
+            extension,
+        }));
+        done += file.size;
+        let _ = tx.send(ScanMsg::Progress { done, total });
+        ctx.request_repaint();
+    }
+    Ok(())
+}
+
+/// A "photo.jpg" that no longer starts like a JPEG was overwritten.
+fn content_matches_name(path: &Path, extension: &str) -> io::Result<bool> {
+    let mut header = [0u8; 32];
+    let n = std::fs::File::open(path)?.read(&mut header)?;
+    Ok(scanner::looks_like(extension, &header[..n]) != Some(false))
 }
 
 /// `dir/name.ext`, or `dir/name 2.ext`, ... if that is taken.

@@ -99,7 +99,7 @@ impl Timestamp {
     }
 
     /// Seconds since 1970, reading this as a UTC time.
-    fn to_unix(self) -> i64 {
+    pub(crate) fn to_unix(self) -> i64 {
         // Civil date → days since 1970 (Howard Hinnant's algorithm).
         let (m, d) = (self.month as i64, self.day as i64);
         let y = self.year as i64 - i64::from(m <= 2);

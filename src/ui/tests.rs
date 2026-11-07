@@ -138,3 +138,53 @@ fn carving_finds_what_the_filesystem_forgot() {
     assert!(folder.join("DCIM/_MG_0001.JPG").exists() && folder.join("recovered_1.jpg").exists());
     std::fs::remove_dir_all(output).unwrap();
 }
+
+fn fixture_backup(encrypted: bool) -> crate::phone::iphone::Backup {
+    let folder = PathBuf::from(concat!(env!("CARGO_MANIFEST_DIR"), "/testdata/iphone-backups"));
+    crate::phone::iphone::find_backups(&[folder]).unwrap().into_iter().find(|b| b.encrypted == encrypted).unwrap()
+}
+
+fn scan_backup(backup: crate::phone::iphone::Backup) -> Harness<'static, ReclaimerApp> {
+    let mut harness = Harness::builder().with_size(vec2(1080.0, 720.0)).build_eframe(|cc| ReclaimerApp::new(cc, None));
+    let output = std::env::temp_dir().join(format!("reclaimer-backup-{}-{}", std::process::id(), backup.encrypted));
+    harness.state_mut().output_dir = output;
+    harness.state_mut().source = Some(super::types::Source::Backup(backup));
+    let ctx = harness.ctx.clone();
+    harness.state_mut().start_scan(ctx);
+    step_until(&mut harness, |app| app.phase != Phase::Scanning);
+    harness
+}
+
+#[test]
+fn iphone_backup_recovers_camera_roll_and_attachments() {
+    use super::types::Filter;
+    let mut harness = scan_backup(fixture_backup(false));
+    let app = harness.state();
+    assert_eq!(app.error, None);
+    let mut found: Vec<_> = app.found.iter().map(|f| (f.folder.clone().unwrap(), f.filename.clone(), f.recently_deleted, f.complete)).collect();
+    found.sort();
+    assert_eq!(found, [
+        ("/Camera Roll/100APPLE".into(), "IMG_0001.JPG".into(), false, true),
+        ("/Camera Roll/100APPLE".into(), "IMG_0002.JPG".into(), true, true),
+        ("/Messages".into(), "Menu.pdf".into(), false, true),
+        ("/WhatsApp".into(), "9f8e2d1c.jpg".into(), false, true),
+    ]);
+    let folder = app.scan_folder.clone().unwrap();
+    assert!(folder.join("Camera Roll/100APPLE/IMG_0002.JPG").exists());
+    assert!(folder.join("WhatsApp/9f8e2d1c.jpg").exists());
+
+    harness.state_mut().filter = Filter::RecentlyDeleted;
+    let visible = harness.state().visible_files();
+    assert_eq!(visible.len(), 1);
+    assert_eq!(harness.state().found[visible[0]].filename, "IMG_0002.JPG");
+    std::fs::remove_dir_all(folder.parent().unwrap()).unwrap();
+}
+
+#[test]
+fn encrypted_backup_explains_itself() {
+    let harness = scan_backup(fixture_backup(true));
+    let app = harness.state();
+    assert_eq!(app.phase, Phase::Choose, "nothing found: back to Choose with the message");
+    assert!(app.error.as_deref().unwrap().contains("encrypted"));
+}
+

@@ -17,14 +17,21 @@ struct Card {
     detail:   String,
     selected: bool,
     enabled:  bool,
+    /// Shown on hover — why a card is disabled, or what it will do.
+    note:     Option<&'static str>,
     pick:     Pick,
 }
 
 #[derive(Clone, Copy)]
 enum Pick {
     Drive(usize),
+    Backup(usize),
+    AllowBackups,
     Image,
 }
+
+/// System Settings › Privacy & Security › Full Disk Access.
+const FULL_DISK_ACCESS: &str = "x-apple.systempreferences:com.apple.preference.security?Privacy_AllFiles";
 
 impl ReclaimerApp {
     pub(super) fn choose_screen(&mut self, ui: &mut Ui) {
@@ -49,15 +56,41 @@ impl ReclaimerApp {
             ),
             selected: matches!(&self.source, Some(Source::Drive(d)) if d.path == drive.path),
             enabled:  !drive.encrypted,
+            note:     drive.encrypted.then_some("This drive is encrypted by the hardware, so deleted files on it can\u{2019}t be read back."),
             pick:     Pick::Drive(i),
         }).collect();
 
+        cards.extend(self.backups.iter().enumerate().map(|(i, backup)| Card {
+            icon:     Icon::Phone,
+            title:    backup.device.clone(),
+            detail:   match (backup.encrypted, backup.date) {
+                (true, _) => "Encrypted backup".into(),
+                (false, Some(date)) => format!("Backed up {}", fmt_day(date.local())),
+                (false, None) => "iPhone backup".into(),
+            },
+            selected: matches!(&self.source, Some(Source::Backup(b)) if b.path == backup.path),
+            enabled:  !backup.encrypted,
+            note:     backup.encrypted.then_some("Encrypted backups need their password, which Reclaimer can\u{2019}t ask for yet."),
+            pick:     Pick::Backup(i),
+        }));
+        if self.backups_locked {
+            cards.push(Card {
+                icon:     Icon::Phone,
+                title:    "iPhone Backups".into(),
+                detail:   "Allow access\u{2026}".into(),
+                selected: false,
+                enabled:  true,
+                note:     Some("macOS keeps iPhone backups private. Turn on Reclaimer in Full Disk Access, then reopen Reclaimer."),
+                pick:     Pick::AllowBackups,
+            });
+        }
+
         let image = match &self.source {
             Some(source @ Source::Image(_)) => Card {
-                icon: Icon::DiskImage, title: source.name(), detail: "Disk image".into(), selected: true, enabled: true, pick: Pick::Image,
+                icon: Icon::DiskImage, title: source.name(), detail: "Disk image".into(), selected: true, enabled: true, note: None, pick: Pick::Image,
             },
             _ => Card {
-                icon: Icon::DiskImage, title: "Disk Image\u{2026}".into(), detail: "Choose a file".into(), selected: false, enabled: true, pick: Pick::Image,
+                icon: Icon::DiskImage, title: "Disk Image\u{2026}".into(), detail: "Choose a file".into(), selected: false, enabled: true, note: None, pick: Pick::Image,
             },
         };
         cards.push(image);
@@ -122,6 +155,14 @@ impl ReclaimerApp {
                     self.set_source(Source::Drive(drive));
                 }
             }
+            Some(Pick::Backup(i)) => {
+                if let Some(backup) = self.backups.get(i).cloned() {
+                    self.set_source(Source::Backup(backup));
+                }
+            }
+            Some(Pick::AllowBackups) => {
+                let _ = open::that(FULL_DISK_ACCESS);
+            }
             Some(Pick::Image) => self.choose_image(),
             None => {}
         }
@@ -147,10 +188,10 @@ fn draw_card(ui: &mut Ui, card: &Card) -> egui::Response {
     let sense = if card.enabled { Sense::click() } else { Sense::hover() };
     let (rect, response) = ui.allocate_exact_size(CARD, sense);
     response.widget_info(|| egui::WidgetInfo::selected(egui::WidgetType::SelectableLabel, card.enabled, card.selected, &card.title));
-    let response = if card.enabled {
-        response.on_hover_cursor(CursorIcon::PointingHand)
-    } else {
-        response.on_hover_text("This drive is encrypted by the hardware, so deleted files on it can\u{2019}t be read back.")
+    let response = if card.enabled { response.on_hover_cursor(CursorIcon::PointingHand) } else { response };
+    let response = match card.note {
+        Some(note) => response.on_hover_text(note),
+        None => response,
     };
 
     let fill = if response.hovered() && !card.selected && card.enabled { SURFACE } else { WHITE };

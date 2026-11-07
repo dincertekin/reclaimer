@@ -1,5 +1,6 @@
 use std::path::{Path, PathBuf};
 use crate::fs::Timestamp;
+use crate::phone::iphone::Backup;
 use crate::source::drives::Drive;
 
 /// A file recovered and saved during a scan.
@@ -7,7 +8,7 @@ use crate::source::drives::Drive;
 pub struct FoundFile {
     pub kind:      String,       // "JPEG", "MP4", ...
     pub extension: String,       // lowercase, without the dot
-    pub offset:    u64,          // where it was found on the source
+    pub offset:    Option<u64>,  // where it was found on the source (not for backups)
     pub size:      u64,
     pub filename:  String,
     pub path:      PathBuf,      // where the recovered copy was saved
@@ -18,6 +19,26 @@ pub struct FoundFile {
     /// Where it was before deletion, when the filesystem remembers.
     pub folder:    Option<String>,
     pub modified:  Option<Timestamp>,
+    /// In the iPhone's Recently Deleted album when it was backed up.
+    pub recently_deleted: bool,
+}
+
+/// Which files the results grid shows.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Filter {
+    All,
+    Category(Category),
+    RecentlyDeleted,
+}
+
+impl Filter {
+    pub fn includes(self, file: &FoundFile) -> bool {
+        match self {
+            Filter::All => true,
+            Filter::Category(c) => file.category == c,
+            Filter::RecentlyDeleted => file.recently_deleted,
+        }
+    }
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
@@ -53,11 +74,12 @@ impl Category {
     }
 }
 
-/// What we scan: an image file or a whole drive.
+/// What we scan: an image file, a whole drive, or an iPhone backup.
 #[derive(Clone, Debug, PartialEq)]
 pub enum Source {
     Image(PathBuf),
     Drive(Drive),
+    Backup(Backup),
 }
 
 impl Source {
@@ -65,6 +87,7 @@ impl Source {
         match self {
             Source::Image(path) => path.file_name().map(|n| n.to_string_lossy().into_owned()).unwrap_or_default(),
             Source::Drive(drive) => drive.name.clone(),
+            Source::Backup(backup) => backup.device.clone(),
         }
     }
 }
@@ -112,11 +135,16 @@ pub fn safe_name(name: &str) -> String {
     if trimmed.is_empty() || trimmed == ".." { "_".into() } else { trimmed.into() }
 }
 
+/// "7 Nov 2026"
+pub fn fmt_day(t: Timestamp) -> String {
+    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
+    let month = MONTHS.get((t.month as usize).wrapping_sub(1)).unwrap_or(&"");
+    format!("{} {month} {}", t.day, t.year)
+}
+
 /// "7 Nov 2026 at 14:02"
 pub fn fmt_date(t: Timestamp) -> String {
-    const MONTHS: [&str; 12] = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-    let month = MONTHS.get(t.month as usize - 1).unwrap_or(&"");
-    format!("{} {month} {} at {:02}:{:02}", t.day, t.year, t.hour, t.minute)
+    format!("{} at {:02}:{:02}", fmt_day(t), t.hour, t.minute)
 }
 
 /// Default home for recovered files: ~/Documents/Reclaimer.

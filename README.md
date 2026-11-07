@@ -15,6 +15,7 @@ A cross-platform file recovery tool written in Rust. Reclaimer scans raw disk im
 - Scan a physical drive — internal disks, USB sticks, SD cards — on macOS, Windows and Linux
 - Or load a `.img`, `.dd`, `.raw`, or any raw disk image via the file picker or drag-and-drop
 - Drives are only ever opened read-only; unreadable (bad) sectors are skipped instead of stopping the scan
+- iPhone backups (Finder / iTunes): recovers the Camera Roll — including photos in Recently Deleted — plus Messages attachments and WhatsApp media
 - Real file names: reads FAT12/16/32, exFAT and NTFS to recover deleted files with their name, original folder and date — fragmented files included
 - Fast scanning — reads in large aligned chunks (about 1 GB in under a second from cache)
 - Structure-aware carving finds what the filesystem forgot — JPEG (JFIF and EXIF), PNG, GIF, MP4, MOV, HEIC, AVIF, PDF, ZIP, DOCX/XLSX/PPTX, SQLite
@@ -74,6 +75,8 @@ src/
 │   ├── window.rs        # read-ahead buffer: few large aligned reads
 │   └── drives/          # list and open physical drives: macos.rs, windows.rs, linux.rs
 ├── fs/                  # deleted files by name: partitions, fat, exfat, ntfs
+├── phone/               # iPhone backups (iphone.rs)
+├── sqlite.rs            # small read-only SQLite reader (phones keep their indexes in SQLite)
 ├── scanner/
 │   ├── mod.rs           # scan() carves by content
 │   └── formats/         # one carver per format; FORMATS table in mod.rs
@@ -151,13 +154,15 @@ pub fn carve(w: &mut Window, start: u64, limit: u64)
 
 Then add one line to `FORMATS` in `src/scanner/formats/mod.rs`. Use the existing carvers as a guide, and add a `sample()` fixture with tests.
 
-Run the tests with `cargo test`. Filesystem tests use real images made by macOS in `testdata/` (rebuild with `testdata/make-fixtures.sh`), a FAT32 volume written by the `fatfs` crate, and a hand-built NTFS volume. Among other things, they check that the two photos in `test.img` come back byte for byte (by size and checksum).
+Run the tests with `cargo test`. Filesystem tests use real images made by macOS in `testdata/` (rebuild with `testdata/make-fixtures.sh`), a FAT32 volume written by the `fatfs` crate, and a hand-built NTFS volume. The SQLite reader and iPhone backups are tested on files made by the real SQLite (`testdata/make-sqlite.py`, `testdata/make-iphone-backup.py`). Among other things, they check that the two photos in `test.img` come back byte for byte (by size and checksum).
 
 ---
 
 ## Roadmap
 
-- [ ] Phones — iPhone backups and Recently Deleted; Android over USB
+- [ ] iPhone over USB (no backup needed) and encrypted backups
+- [ ] Android over USB — including the gallery's trash
+- [ ] HEIC thumbnails in the grid (HEIC photos currently show an icon)
 - [ ] NTFS files whose records spill into extension records (very fragmented files)
 - [ ] Ask for administrator rights automatically on Windows and Linux (macOS already does)
 
@@ -172,6 +177,16 @@ Run the tests with `cargo test`. Filesystem tests use real images made by macOS 
 | Linux | `/dev/sdX`, `/dev/nvmeXnY`, `/dev/mmcblkN` | Run with `sudo`, or join the `disk` group |
 
 The internal SSD in Apple silicon and T2 Macs is always hardware-encrypted, so raw reads of it return encrypted data. Carving works on external drives, USB sticks, SD cards and disk images.
+
+---
+
+## Phones
+
+| Source | What comes back | Notes |
+|--------|-----------------|-------|
+| iPhone backup on this computer | Camera Roll (with **Recently Deleted**), Messages attachments, WhatsApp media | macOS: Reclaimer needs **Full Disk Access** to see backups — the Choose screen offers a shortcut. Encrypted backups are listed but can't be read yet. |
+
+Backups are found in `~/Library/Application Support/MobileSync/Backup` (macOS) and `%APPDATA%\Apple Computer\MobileSync\Backup` or `%USERPROFILE%\Apple\MobileSync\Backup` (Windows). A photo deleted from Recently Deleted *before* the backup was made isn't in it.
 
 ---
 

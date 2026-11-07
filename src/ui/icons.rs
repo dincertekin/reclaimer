@@ -7,6 +7,7 @@ use eframe::egui::{pos2, vec2, Color32, CornerRadius, Painter, Rect, Shape, Stro
 pub enum Icon {
     Drive,
     Card,
+    Phone,
     DiskImage,
     Photo,
     Film,
@@ -52,6 +53,11 @@ pub fn paint(painter: &Painter, rect: Rect, icon: Icon, color: Color32) {
             for x in [9.5, 12.0, 14.5] {
                 line((x, 5.5), (x, 8.0));
             }
+        }
+        Icon::Phone => {
+            outline(r(7.0, 2.5, 17.0, 21.5), 2.5);
+            line((10.5, 5.0), (13.5, 5.0)); // speaker
+            line((10.0, 19.0), (14.0, 19.0)); // home bar
         }
         Icon::DiskImage => {
             document_outline(painter, p(5.5, 2.5), s, stroke);

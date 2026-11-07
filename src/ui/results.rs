@@ -124,15 +124,15 @@ impl ReclaimerApp {
         ui.horizontal(|ui| {
             ui.spacing_mut().item_spacing.x = 4.0;
             let mut choice = None;
-            if chip(ui, "All", self.found.len(), self.filter.is_none()).clicked() {
-                choice = Some(None);
-            }
-            for category in Category::ALL {
-                let count = self.count(category);
-                let active = self.filter == Some(category);
-                // Hide empty categories — fewer, more meaningful choices.
-                if (count > 0 || active) && chip(ui, category.label(), count, active).clicked() {
-                    choice = Some(Some(category));
+            let filters = std::iter::once((Filter::All, "All"))
+                .chain(Category::ALL.map(|c| (Filter::Category(c), c.label())))
+                .chain([(Filter::RecentlyDeleted, "Recently Deleted")]);
+            for (filter, label) in filters {
+                let count = self.count(filter);
+                let active = self.filter == filter;
+                // Hide empty ones — fewer, more meaningful choices.
+                if (count > 0 || active || filter == Filter::All) && chip(ui, label, count, active).clicked() {
+                    choice = Some(filter);
                 }
             }
             if let Some(filter) = choice {
@@ -286,12 +286,17 @@ impl ReclaimerApp {
         if let Some(folder) = &file.folder {
             rows.push(("Was in", folder.clone()));
         }
+        if file.recently_deleted {
+            rows.push(("Album", "Recently Deleted".into()));
+        }
         if let Some(modified) = file.modified {
             rows.push(("Modified", fmt_date(modified)));
         }
         rows.push(("Size", format!("{} bytes", fmt_count(file.size as usize))));
         rows.push(("Status", if file.complete { "Intact".into() } else { "Partial".into() }));
-        rows.push(("Found at", format!("0x{:08X}", file.offset)));
+        if let Some(offset) = file.offset {
+            rows.push(("Found at", format!("0x{offset:08X}")));
+        }
         for (label, value) in rows {
             let (row, _) = ui.allocate_exact_size(vec2(width, 28.0), Sense::hover());
             ui.painter().hline(row.x_range(), row.top(), Stroke::new(1.0, LINE));
