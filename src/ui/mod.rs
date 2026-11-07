@@ -280,10 +280,14 @@ impl eframe::App for ReclaimerApp {
 
         let window = ctx.content_rect();
 
-        // The transparent title bar strip still moves the window.
+        // The transparent title bar strip still moves the window. Start the
+        // drag on mouse-down: macOS needs the press itself, and starting
+        // later (once egui sees movement) logs "Window move completed
+        // without beginning".
         if theme::TITLEBAR > 0.0 {
             let strip = egui::Rect::from_min_size(window.min, egui::vec2(window.width(), theme::TITLEBAR));
-            if ui.interact(strip, egui::Id::new("titlebar"), Sense::drag()).drag_started() {
+            let response = ui.interact(strip, egui::Id::new("titlebar"), Sense::click_and_drag());
+            if response.hovered() && ctx.input(|i| i.pointer.primary_pressed()) {
                 ctx.send_viewport_cmd(egui::ViewportCommand::StartDrag);
             }
         }

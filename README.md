@@ -102,6 +102,8 @@ To open a disk image straight away: `cargo run -- path/to/disk.img`.
 
 UI screenshots: `RECLAIMER_SHOTS=/some/dir cargo test scan_an_image` drives the app and saves a PNG per step.
 
+The app icon is drawn in code: `swift icons/make-icon.swift icons` (macOS) regenerates `icon.png`, `icon.icns` and `icon.ico`.
+
 ---
 
 ## Adding a New File Format
@@ -116,7 +118,7 @@ pub fn carve(w: &mut Window, start: u64, limit: u64)
 
 Then add one line to `FORMATS` in `src/scanner/formats/mod.rs`. Use the existing carvers as a guide, and add a `sample()` fixture with tests.
 
-Run the tests with `cargo test`. Among other things, they check that `test.img` gives back the files in `originals/` byte for byte.
+Run the tests with `cargo test`. Among other things, they check that the two photos in `test.img` come back byte for byte (by size and checksum).
 
 ---
 

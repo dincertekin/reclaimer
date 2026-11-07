@@ -124,17 +124,23 @@ mod tests {
         &image[f.offset as usize..(f.offset + f.len) as usize]
     }
 
+    /// FNV-1a: a tiny checksum, enough to tell recovered bytes changed.
+    fn checksum(bytes: &[u8]) -> u64 {
+        bytes.iter().fold(0xcbf2_9ce4_8422_2325, |h, &b| (h ^ b as u64).wrapping_mul(0x100_0000_01b3))
+    }
+
     #[test]
     fn test_img_recovers_the_original_photos_exactly() {
-        let root  = env!("CARGO_MANIFEST_DIR");
-        let image = std::fs::read(format!("{root}/test.img")).unwrap();
+        let image = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/test.img")).unwrap();
         let found = scan_all(image.clone());
 
-        assert_eq!(found.len(), 2);
-        for (f, name) in found.iter().zip(["1.jpg", "2.jpg"]) {
-            let original = std::fs::read(format!("{root}/originals/{name}")).unwrap();
+        // Offset, size and checksum of the two photos written into test.img.
+        let expected = [(1024, 94_978, 0xe466_e673_c9b6_1576), (102_400, 42_355, 0x067f_c741_409e_0f5b)];
+        assert_eq!(found.len(), expected.len());
+        for (f, (offset, len, sum)) in found.iter().zip(expected) {
             assert!(f.complete);
-            assert_eq!(bytes_of(&image, f), original, "{name} differs");
+            assert_eq!((f.offset, f.len), (offset, len));
+            assert_eq!(checksum(bytes_of(&image, f)), sum, "photo at {offset} differs");
         }
     }
 

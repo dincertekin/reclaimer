@@ -119,9 +119,10 @@ mod tests {
 
     #[test]
     fn real_photo_does_not_swallow_the_next_one() {
-        let dir = concat!(env!("CARGO_MANIFEST_DIR"), "/originals");
-        let first  = std::fs::read(format!("{dir}/1.jpg")).unwrap();
-        let second = std::fs::read(format!("{dir}/2.jpg")).unwrap();
+        // test.img holds two real photos; put them back to back, no gap.
+        let image  = std::fs::read(concat!(env!("CARGO_MANIFEST_DIR"), "/test.img")).unwrap();
+        let first  = image[1024..1024 + 94_978].to_vec();
+        let second = image[102_400..102_400 + 42_355].to_vec();
         let carved = carve_vec([first.clone(), second].concat(), carve).unwrap();
         assert_eq!(carved, Carved::complete(first.len() as u64, KIND));
     }
